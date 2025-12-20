@@ -256,7 +256,7 @@ class ASRJpModeWindow(QWidget):
         base_w = 220 * s
         content_w = self.container_layout.sizeHint().width() + 40
         w = max(base_w, content_w)
-        self.setFixedWidth(w + 50)
+        self.setFixedWidth(int(w + 50))
         
         self.base_height = int(48 * s)
         self.expanded_height = int(100 * s)

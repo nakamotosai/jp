@@ -58,6 +58,21 @@ class ScaledTextEdit(QTextEdit):
         self.font_factor = 1.0
         self.setCursorWidth(4) 
         self.apply_scale(1.0)
+        self.document().contentsChanged.connect(self._center_vertically)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._center_vertically()
+
+    def _center_vertically(self):
+        # Calculate dynamic margin to center text vertically
+        doc_height = self.document().size().height()
+        widget_height = self.height()
+        if widget_height > doc_height:
+            margin = (widget_height - doc_height) / 2
+            self.setViewportMargins(0, int(margin), 0, 0)
+        else:
+            self.setViewportMargins(0, 0, 0, 0)
 
     def apply_scale(self, scale, family=None, font_factor=None):
         self.current_scale = scale
@@ -386,7 +401,7 @@ class TranslatorWindow(QWidget):
 
     def _handle_resizing(self):
         s = self.window_scale
-        visible_w = 180 * s
+        visible_w = 260 * s
         self.setFixedWidth(int(visible_w + 40))
         text = self.zh_input.toPlainText()
         fm = QFontMetrics(self.zh_input.font())
@@ -415,8 +430,8 @@ class TranslatorWindow(QWidget):
             self.zh_input.setFixedHeight(int(sect_h * s))
             self.jp_display.setFixedHeight(int(sect_h * s))
         else:
-            self.zh_input.setFixedHeight(single_line_height)
-            self.jp_display.setFixedHeight(single_line_height)
+            self.zh_input.setFixedHeight(int(45 * s))
+            self.jp_display.setFixedHeight(int(45 * s))
         self.clear_btn.setVisible(self.is_expanded or bool(text))
         m_x = int(12 * s)
         self.top_layout.setContentsMargins(m_x, 0, m_x, 0)
@@ -600,8 +615,8 @@ class TranslatorWindow(QWidget):
             self.zh_input.setPlaceholderText(self.m_cfg.get_prompt("idle_tr"))
             if self.zh_input.toPlainText().strip():
                 self.auto_clear_timer.start()
-    def update_translation(self, t): 
-        self.jp_display.setPlaceholderText(self.m_cfg.get_prompt("idle_tr_res") or "入력을ください"); 
+    def on_translation_ready(self, t): 
+        self.jp_display.setPlaceholderText(self.m_cfg.get_prompt("idle_tr_res") or "等待输入..."); 
         self.jp_display.setPlainText(t); 
         self.jp_display._on_content_changed()
         if t.strip() or self.zh_input.toPlainText().strip():
@@ -614,7 +629,7 @@ class TranslatorWindow(QWidget):
         elif status == "translating":
             if not self.jp_display.toPlainText(): self.jp_display.setPlaceholderText(self.m_cfg.get_prompt("translating"))
         elif status == "idle" or "加载完成" in status: 
-            self.jp_display.setPlaceholderText(self.m_cfg.get_prompt("idle_tr_res") or "入力をください")
+            self.jp_display.setPlaceholderText(self.m_cfg.get_prompt("idle_tr_res") or "等待输入...")
             self.zh_input.setPlaceholderText(self.m_cfg.get_prompt("idle_tr"))
             
             # Immediate refresh if current text is a placeholder from any scheme
