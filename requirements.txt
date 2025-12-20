@@ -1,0 +1,5 @@
+PyQt6
+pynput
+pyperclip
+pywin32
+requests

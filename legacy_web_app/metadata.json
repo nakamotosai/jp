@@ -1,0 +1,5 @@
+{
+  "name": "极简日文输入翻译助手 (Minimalist Japanese Input Assistant)",
+  "description": "A high-fidelity minimalist desktop-style translation overlay. It translates Chinese input into Japanese in real-time and simulates system-level paste/send actions with an elegant UI/UX design.",
+  "requestFramePermissions": []
+}

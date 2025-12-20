@@ -1,0 +1,70 @@
+{
+  "schemes": [
+    {
+      "id": "default",
+      "name": "标准模式",
+      "prompts": {
+        "idle_zh": "按住大写键说话",
+        "idle_jp": "按住大写键说话 → 日语",
+        "idle_tr": "请输入中文",
+        "listening": "正在聆听...",
+        "translating": "正在翻译...",
+        "loading": "引擎正在加载...",
+        "init": "等待模型初始化..."
+      }
+    },
+    {
+      "id": "cute",
+      "name": "元气萌宠",
+      "prompts": {
+        "idle_zh": "嘘，我在等你开口呢~",
+        "idle_jp": "快说中文，我来变日语魔法！",
+        "idle_tr": "告诉我你想翻译什么呀~",
+        "listening": "竖起小耳朵听着呢...",
+        "translating": "小脑袋飞速转动中...",
+        "loading": "正在穿衣服，等我一下下~",
+        "init": "正在努力醒来中..."
+      }
+    },
+    {
+      "id": "butler",
+      "name": "贴身管家",
+      "prompts": {
+        "idle_zh": "随时为您效劳，主人。",
+        "idle_jp": "已准备好日语同传，请讲。",
+        "idle_tr": "请吩咐您需要翻译的内容。",
+        "listening": "正在倾听您的吩咐...",
+        "translating": "正在为您优化表达...",
+        "loading": "系统核心初始化中，请稍后。",
+        "init": "程序正在准备就绪..."
+      }
+    },
+    {
+      "id": "cyber",
+      "name": "赛博黑客",
+      "prompts": {
+        "idle_zh": "检测到生命体。等待指令。",
+        "idle_jp": "日语协议已加载。输入源：中文。",
+        "idle_tr": "输入原始缓冲区数据...",
+        "listening": "数据流采集中心...",
+        "translating": "正在欺骗宇宙法则...",
+        "loading": "正在重启世界线...",
+        "init": "系统底层逻辑构建中..."
+      }
+    },
+    {
+      "id": "tsundere",
+      "name": "傲娇毒舌",
+      "prompts": {
+        "idle_zh": "没事别吵我，除非你要说话。",
+        "idle_jp": "日语我也懂，但我懒得说。",
+        "idle_tr": "说吧，又遇到什么不认识的字了？",
+        "listening": "嗯...勉强听一下吧。",
+        "translating": "这句太难翻译了，我在努力！",
+        "loading": "别催了，我还没睡醒呢。",
+        "init": "正在翻找字典，急什么..."
+      }
+    }
+  ],
+  "current_scheme": "butler"
+}
