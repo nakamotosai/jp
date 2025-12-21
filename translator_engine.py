@@ -75,7 +75,19 @@ class CT2TranslatorEngine(BaseTranslatorEngine):
     def load(self, model_path: str) -> bool:
         try:
             import ctranslate2
+            import os # Ensure os is imported locally if not globally available in scope, but it is globally.
             
+            # --- 自动探测子目录 ---
+            if os.path.isdir(model_path):
+                # 如果当前目录下没有 model.bin，则找子目录
+                if not os.path.exists(os.path.join(model_path, "model.bin")):
+                    for root, dirs, files in os.walk(model_path):
+                        if "model.bin" in files:
+                            print(f"[CT2Engine] 修正模型路径: {model_path} -> {root}")
+                            model_path = root
+                            break
+            # --------------------
+
             print(f"[CT2Engine] 加载模型: {model_path}")
             
             # 检查设备
@@ -419,6 +431,14 @@ class TranslatorEngine(QObject):
         # 状态
         self.mode = "online"  # "online" or "local"
         self.local_is_ready = False
+        self._current_engine_type = None  # 当前加载的引擎类型
+    
+    @property
+    def current_engine_id(self) -> str:
+        """获取当前正在运行的引擎ID"""
+        if self.mode == "online":
+            return "online"
+        return self._current_engine_type if self.local_is_ready else None
     
     def set_mode(self, mode: str):
         """设置翻译模式"""
@@ -438,40 +458,55 @@ class TranslatorEngine(QObject):
     
     def switch_engine(self, engine_type: str):
         """切换翻译引擎"""
-        if engine_type == self._current_engine_type:
-            print(f"[TranslatorEngine] 引擎未变化: {engine_type}")
+        if engine_type == self._current_engine_type and self.mode == "local" and self.local_is_ready:
+            print(f"[TranslatorEngine] 引擎已加载且模式正确: {engine_type}")
             return
         
         self.status_changed.emit("正在切换翻译引擎...")
         
-        # 卸载旧引擎
-        self._unload_current_engine()
+        # 即使引擎类型相同，如果当前是 online 模式也需要切换
+        should_reload = (engine_type != self._current_engine_type) or (not self.local_is_ready)
         
-        # 更新配置
-        self.config.current_translator_engine = engine_type
-        self._current_engine_type = engine_type
-        
-        # 如果当前是本地模式，启动新引擎
-        if self.mode == "local":
+        if should_reload:
+            # 卸载旧引擎
+            self._unload_current_engine()
+            
+            # 更新配置
+            self.config.current_translator_engine = engine_type
+            self._current_engine_type = engine_type
+            
+            # 强制设置为本地模式并启动
+            self.mode = "local"
             self._start_local_engine()
+        else:
+            self.mode = "local"
+            self._current_engine_type = engine_type
+            self.status_changed.emit("idle")
     
     def _start_local_engine(self):
         """启动本地翻译引擎"""
-        engine_type = self.config.current_translator_engine
-        
-        # 获取模型路径（自动解压ZIP）
-        model_path = self.config.get_translator_model_path(engine_type)
-        if not model_path:
-            self.status_changed.emit("模型路径无效")
-            return
-        
-        self.status_changed.emit(f"正在加载翻译模型...")
-        print(f"[TranslatorEngine] 加载引擎: {engine_type}, 路径: {model_path}")
-        
-        if self._use_multiprocess:
-            self._start_multiprocess_engine(model_path, engine_type)
-        else:
-            self._start_inprocess_engine(model_path, engine_type)
+        try:
+            engine_type = self.config.current_translator_engine
+            
+            # 获取模型路径（自动解压ZIP）
+            model_path = self.config.get_translator_model_path(engine_type)
+            if not model_path:
+                self.status_changed.emit("模型路径无效")
+                # 自动回退
+                self.mode = "online"
+                return
+            
+            self.status_changed.emit(f"正在加载翻译模型...")
+            print(f"[TranslatorEngine] 加载引擎: {engine_type}, 路径: {model_path}")
+            
+            if self._use_multiprocess:
+                self._start_multiprocess_engine(model_path, engine_type)
+            else:
+                self._start_inprocess_engine(model_path, engine_type)
+        except Exception as e:
+            print(f"[TranslatorEngine] 启动本地引擎异常: {e}")
+            self.status_changed.emit(f"加载失败: {e}")
+            self.mode = "online" # 故障回退
     
     def _start_inprocess_engine(self, model_path: str, engine_type: str):
         """同进程加载引擎（简单但可能阻塞UI）"""
@@ -622,8 +657,11 @@ class TranslationWorker(QObject):
             self.status_changed.emit("loading")
             if engine_id == "online":
                 self.engine.set_mode("online")
+                self.status_changed.emit("idle")
             else:
-                self.engine.set_mode("local")
+                # 关键修复：switch_engine 现在内部处理了模式切换逻辑
+                self.engine.switch_engine(engine_id)
         except Exception as e:
             print(f"[TranslationWorker] Engine change error: {e}")
+            self.status_changed.emit(f"Error: {e}")
 

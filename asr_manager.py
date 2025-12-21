@@ -9,7 +9,6 @@ import os
 import re
 import gc
 import sys
-import torch
 import numpy as np
 import multiprocessing
 import traceback
@@ -287,7 +286,11 @@ class PyTorchASREngine(BaseASREngine):
     def __init__(self):
         super().__init__()
         self.model = None
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        try:
+            import torch
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        except:
+            self.device = "cpu"
     
     def load(self, model_path: str) -> bool:
         try:
@@ -318,8 +321,12 @@ class PyTorchASREngine(BaseASREngine):
         if self.model:
             del self.model
             self.model = None
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except:
+            pass
         gc.collect()
         self.is_loaded = False
 
@@ -403,7 +410,11 @@ class ASRManager(QObject):
             self._sig_transcribe.connect(self.worker.transcribe)
             
             self.thread.start()
-            self._sig_load_model.emit()
+            # self._sig_load_model.emit() # 移出初始化，由外部按需触发
+
+    def start(self):
+        """触发初次加载"""
+        self._sig_load_model.emit()
     
     def transcribe_async(self, audio_data):
         if isinstance(audio_data, np.ndarray):

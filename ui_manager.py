@@ -33,12 +33,21 @@ class FontManager:
     def get_font(cls, serif=True):
         return cls._serif_family if serif else cls._sans_family
 
+    @classmethod
+    def get_correct_family(cls, name):
+        """Map user-friendly names to actual loaded font families"""
+        if name == "思源宋体":
+            return cls._serif_family
+        elif name == "思源黑体":
+            return cls._sans_family
+        return name
+
 class ScaledTextEdit(QTextEdit):
     sizeHintChanged = pyqtSignal(int, int) # suggested width, height
     submitPressed = pyqtSignal()
     newlineInserted = pyqtSignal()
 
-    def __init__(self, parent=None, placeholder="", color="black"):
+    def __init__(self, parent=None, placeholder="", color="black", hide_cursor=False):
         super().__init__(parent)
         self.setPlaceholderText(placeholder)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -50,14 +59,39 @@ class ScaledTextEdit(QTextEdit):
         
         self.base_min_height = 50 
         self.base_max_height = 100 
-        self.base_font_size = 12 
+        self.base_font_size = 15 
         self.current_scale = 1.0
         self.current_family = FontManager.get_font(True)
         self.color = color
         self.font_factor = 1.0
-        self.setCursorWidth(4) 
+        self.setCursorWidth(0 if hide_cursor else 4) 
         self.apply_scale(1.0)
         self.document().contentsChanged.connect(self._center_vertically)
+
+    def contextMenuEvent(self, event):
+        """Disable default menu and show app menu"""
+        win = self.window()
+        if hasattr(win, "show_context_menu"):
+            win.show_context_menu(event.globalPos())
+
+    def mousePressEvent(self, e):
+        """Pass drag start to window if left button"""
+        if e.button() == Qt.MouseButton.LeftButton:
+            self.window()._start_drag(e.globalPosition().toPoint())
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        """Pass drag to window if dragging"""
+        win = self.window()
+        if hasattr(win, '_dragging') and win._dragging:
+            win.move(e.globalPosition().toPoint() - win._drag_pos)
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        win = self.window()
+        if hasattr(win, '_dragging'):
+            win._dragging = False
+        super().mouseReleaseEvent(e)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -461,9 +495,12 @@ class TranslatorWindow(QWidget):
     requestFontSizeChange = pyqtSignal(float)
     requestRecordStart = pyqtSignal()
     requestRecordStop = pyqtSignal()
+    requestAutoTTSChange = pyqtSignal(bool)
+    requestTTSDelayChange = pyqtSignal(int)
     requestPersonalityChange = pyqtSignal(str)
     requestHotkeyChange = pyqtSignal(str, str)
     requestRestart = pyqtSignal()
+    requestOpenSettings = pyqtSignal()
     requestQuit = pyqtSignal()
 
     def __init__(self):
@@ -493,8 +530,8 @@ class TranslatorWindow(QWidget):
         self.top_layout.setSpacing(10)
         self.top_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.jp_badge = Badge("日>", "rgba(0,0,0,0.1)", "white")
-        self.jp_display = ScaledTextEdit(self, self.m_cfg.get_prompt("idle_tr_res") or "等待输入...", "white")
-        self.jp_display.setReadOnly(False) 
+        self.jp_display = ScaledTextEdit(self, self.m_cfg.get_prompt("idle_tr_res") or "等待输入...", "white", hide_cursor=True)
+        self.jp_display.setReadOnly(True) 
         self.jp_display.viewport().setCursor(Qt.CursorShape.ArrowCursor) 
         self.jp_display.sizeHintChanged.connect(self._handle_resizing)
         self.jp_display.submitPressed.connect(self._on_submit)
@@ -610,7 +647,8 @@ class TranslatorWindow(QWidget):
     def _apply_scaling(self):
         s = self.window_scale
         f = self.font_size_factor
-        family = FontManager.get_font(self.current_font_name == "思源宋体")
+        # Use FontManager to map the name correctly
+        family = FontManager.get_correct_family(self.current_font_name)
         self.jp_badge.apply_scale(s, family); self.zh_badge.apply_scale(s, family)
         self.jp_display.apply_scale(s, family, f); self.zh_input.apply_scale(s, family, f)
         self._handle_resizing(); self._apply_theme()
@@ -653,98 +691,35 @@ class TranslatorWindow(QWidget):
         """)
 
     def contextMenuEvent(self, event):
-        from model_config import get_model_config, ASREngineType, TranslatorEngineType, ASROutputMode
-        config = get_model_config()
-        menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: rgba(45, 45, 45, 0.98);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 6px;
-                padding: 4px;
-            }
-            QMenu::item {
-                color: #eeeeee;
-                padding: 6px 20px;
-                margin: 2px;
-                border-radius: 4px;
-                background: transparent;
-                text-align: left;
-            }
-            QMenu::item:selected {
-                background-color: rgba(255, 255, 255, 0.1);
-                color: white;
-            }
-            QMenu::item:checked {
-                color: #00ffcc;
-            }
-            QMenu::separator {
-                height: 1px;
-                background: rgba(255, 255, 255, 0.1);
-                margin: 4px 10px;
-            }
-            QMenu::right-arrow {
-                image: none;
-                width: 0px;
-                padding-right: 0px;
-            }
-        """)
+        self.show_context_menu(event.globalPos())
+
+    def show_context_menu(self, global_pos):
+        menu = QMenu() # 不带 parent 以确保即便窗口隐藏时也能正常显示菜单
+        # 1. 应用模式
         mode_menu = menu.addMenu("应用模式")
         modes = [("asr", "语音输入模式"), ("asr_jp", "日语语音模式"), ("translation", "文字翻译模式")]
+        from model_config import get_model_config
+        current_mode = get_model_config().app_mode
         for m_id, m_name in modes:
-            action = mode_menu.addAction(m_name)
+            display_name = f"{m_name}{'        ✔' if m_id == current_mode else ''}"
+            action = mode_menu.addAction(display_name)
             action.triggered.connect(lambda checked, mid=m_id: self.requestAppModeChange.emit(mid))
-        menu.addSeparator()
-        asr_menu = menu.addMenu("ASR 引擎")
-        for engine_id, info in self.m_cfg.ASR_MODELS.items():
-            if not info.available: continue
-            action = asr_menu.addAction(info.name)
-            action.setCheckable(True)
-            action.setChecked(self.m_cfg.current_asr_engine == engine_id)
-            action.triggered.connect(lambda checked, eid=engine_id: self.requestASREngineChange.emit(eid))
-        trans_menu = menu.addMenu("翻译引擎")
-        for engine_id, info in self.m_cfg.TRANSLATOR_MODELS.items():
-            action = trans_menu.addAction(info.name)
-            action.setCheckable(True)
-            action.setChecked(self.m_cfg.current_translator_engine == engine_id)
-            action.triggered.connect(lambda checked, eid=engine_id: self.requestTranslatorEngineChange.emit(eid))
-        clean_menu = menu.addMenu("文本处理")
-        raw_action = clean_menu.addAction("原始结果")
-        raw_action.setCheckable(True)
-        raw_action.setChecked(self.m_cfg.asr_output_mode == ASROutputMode.RAW.value)
-        raw_action.triggered.connect(lambda: self.requestASROutputModeChange.emit(ASROutputMode.RAW.value))
-        clean_action = clean_menu.addAction("智能清理")
-        clean_action.setCheckable(True)
-        clean_action.setChecked(self.m_cfg.asr_output_mode == ASROutputMode.CLEANED.value)
-        clean_action.triggered.connect(lambda: self.requestASROutputModeChange.emit(ASROutputMode.CLEANED.value))
-        menu.addSeparator()
-        theme_menu = menu.addMenu("界面设置")
-        theme_sub = theme_menu.addMenu("配色主题")
-        theme_sub.addAction("深色模式").triggered.connect(lambda: self.requestThemeChange.emit("Dark"))
-        theme_sub.addAction("浅色模式").triggered.connect(lambda: self.requestThemeChange.emit("Light"))
-        scale_sub = theme_menu.addMenu("窗口缩放")
-        for s in [0.8, 1.0, 1.2, 1.5]:
-            scale_sub.addAction(f"{int(s*100)}%").triggered.connect(lambda checked, val=s: self.requestScaleChange.emit(val))
-        font_sub = theme_menu.addMenu("全局字体")
-        font_sub.addAction("思源宋体").triggered.connect(lambda: self.requestFontChange.emit("思源宋体"))
-        font_sub.addAction("思源黑体").triggered.connect(lambda: self.requestFontChange.emit("思源黑体"))
-        font_size_sub = theme_menu.addMenu("文字大小")
-        for s in [0.8, 1.0, 1.2, 1.5]:
-            font_size_sub.addAction(f"{int(s*100)}%").triggered.connect(lambda checked, val=s: self.requestFontSizeChange.emit(val))
         
-        menu.addAction("快捷键设置").triggered.connect(self._show_hotkey_dialog)
-
-        personality_menu = menu.addMenu("AI 个性风格")
-        for p_id, p_name in self.m_cfg.get_personality_schemes():
-            action = personality_menu.addAction(p_name)
-            action.setCheckable(True)
-            action.setChecked(self.m_cfg.personality.data.get("current_scheme") == p_id)
-            action.triggered.connect(lambda checked, pid=p_id: self.requestPersonalityChange.emit(pid))
-
+        menu.addSeparator()
+        menu.addAction("详细设置").triggered.connect(self.requestOpenSettings.emit)
+        
+        from startup_manager import StartupManager
+        is_on = StartupManager.is_enabled()
+        # 统一使用右侧文本标记勾选
+        autostart_text = f"开机自启{'        ✔' if is_on else ''}"
+        menu.addAction(autostart_text).triggered.connect(lambda: StartupManager.set_enabled(not is_on))
+        
         menu.addSeparator()
         menu.addAction("重启应用").triggered.connect(self.requestRestart.emit)
         menu.addAction("退出程序").triggered.connect(self.requestQuit.emit)
-        menu.exec(event.globalPos())
+        
+        self.activateWindow() # 确保窗口激活，解决点击外部不消失的问题
+        menu.exec(global_pos)
 
     def _show_hotkey_dialog(self):
         asr = self.m_cfg.hotkey_asr
@@ -759,6 +734,10 @@ class TranslatorWindow(QWidget):
     def change_scale(self, s): self.window_scale = s; self._apply_scaling()
     def change_font(self, f): self.current_font_name = f; self._apply_scaling()
     def change_font_size(self, f): self.font_size_factor = f; self._apply_scaling()
+    
+    # Compatibility methods for main.py
+    def set_font_name(self, name): self.change_font(name)
+    def set_scale_factor(self, scale): self.change_scale(scale)
     def _on_submit(self): self.requestSend.emit(self.jp_display.toPlainText())
 
     def _start_drag(self, pos):
@@ -807,13 +786,12 @@ class TranslatorWindow(QWidget):
             self.auto_clear_timer.start()
     def update_recording_status(self, is_recording):
         self.voice_btn.set_recording(is_recording)
-        self.zh_input.setVisible(not is_recording)
-        self.waveform.setVisible(is_recording)
+        # Fix: Don't hide zh_input and don't show waveform in Translation Mode
+        # This keeps the layout stable and the red button on the right.
         if is_recording:
-            self.waveform.setFixedWidth(self.zh_input.width())
-            self.waveform.move(self.zh_input.pos())
             self.auto_clear_timer.stop()
-            if not self.zh_input.toPlainText(): self.zh_input.setPlaceholderText(self.m_cfg.get_prompt("listening"))
+            if not self.zh_input.toPlainText():
+                self.zh_input.setPlaceholderText(self.m_cfg.get_prompt("listening"))
         else: 
             self.zh_input.setPlaceholderText(self.m_cfg.get_prompt("idle_tr"))
             if self.zh_input.toPlainText().strip():
@@ -844,6 +822,9 @@ class TranslatorWindow(QWidget):
                 self.zh_input.clear()
             if self.m_cfg.is_placeholder_text(self.jp_display.toPlainText()):
                 self.jp_display.clear()
+    def update_segment(self, text):
+        """Called by ASR manager when voice result is ready"""
+        self.set_zh_text(text)
     def focus_input(self):
         self.zh_input.setFocus(); c = self.zh_input.textCursor(); c.movePosition(c.MoveOperation.End); self.zh_input.setTextCursor(c)
     def clear_input(self): self.zh_input.clear(); self.jp_display.clear(); self.jp_display._on_content_changed(); self.zh_input._on_content_changed()

@@ -144,11 +144,18 @@ class ModelConfig:
     }
     
     def __init__(self):
-        self._current_asr_engine = ASREngineType.SENSEVOICE_ONNX.value  # 使用 Sherpa-ONNX 默认
+        self._current_asr_engine = ASREngineType.SENSEVOICE_ONNX.value
         self._current_translator_engine = TranslatorEngineType.GOOGLE.value
         self._asr_output_mode = ASROutputMode.RAW.value
-        self._hotkey_asr = "caps_lock"
-        self._hotkey_toggle_ui = "alt+z"
+        self._hotkey_asr = "ctrl+windows"
+        self._hotkey_toggle_ui = "alt+windows"
+        self._auto_tts = False
+        self._tts_delay_ms = 5000
+        self._wizard_completed = False
+        self._theme_mode = "Dark"
+        self._window_scale = 1.0
+        self._font_name = "思源宋体"
+        self._app_mode = "asr"
         self.data = {}
         self._load_config()
         self._scan_models()
@@ -165,6 +172,13 @@ class ModelConfig:
                     self._asr_output_mode = self.data.get('asr_output_mode', self._asr_output_mode)
                     self._hotkey_asr = self.data.get('hotkey_asr', self._hotkey_asr)
                     self._hotkey_toggle_ui = self.data.get('hotkey_toggle_ui', self._hotkey_toggle_ui)
+                    self._auto_tts = self.data.get('auto_tts', self._auto_tts)
+                    self._tts_delay_ms = self.data.get('tts_delay_ms', self._tts_delay_ms)
+                    self._wizard_completed = self.data.get('wizard_completed', self._wizard_completed)
+                    self._theme_mode = self.data.get('theme_mode', self._theme_mode)
+                    self._window_scale = self.data.get('window_scale', self._window_scale)
+                    self._font_name = self.data.get('font_name', self._font_name)
+                    self._app_mode = self.data.get('app_mode', self._app_mode)
         except Exception as e:
             print(f"[ModelConfig] 加载配置失败: {e}")
     
@@ -181,6 +195,15 @@ class ModelConfig:
             config['asr_output_mode'] = self._asr_output_mode
             config['hotkey_asr'] = self._hotkey_asr
             config['hotkey_toggle_ui'] = self._hotkey_toggle_ui
+            config['auto_tts'] = self._auto_tts
+            config['tts_delay_ms'] = self._tts_delay_ms
+            config['wizard_completed'] = self._wizard_completed
+            config['theme_mode'] = self._theme_mode
+            config['window_scale'] = self._window_scale
+            config['font_name'] = self._font_name
+            config['app_mode'] = self._app_mode
+            
+            self.data = config # 同步内存中的 data
             
             with open(self.CONFIG_PATH, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
@@ -372,7 +395,71 @@ class ModelConfig:
     def hotkey_toggle_ui(self, value: str):
         self._hotkey_toggle_ui = value
         self.save_config()
+
+    @property
+    def auto_tts(self) -> bool:
+        return self._auto_tts
+
+    @auto_tts.setter
+    def auto_tts(self, value: bool):
+        self._auto_tts = value
+        self.save_config()
+
+    @property
+    def tts_delay_ms(self) -> int:
+        """TTS 播放延迟时间（毫秒），用于等待蓝牙耳机从 HFP 切换回 Stereo 模式"""
+        return getattr(self, '_tts_delay_ms', 5000)
+
+    @tts_delay_ms.setter
+    def tts_delay_ms(self, value: int):
+        self._tts_delay_ms = max(0, int(value))
+        self.save_config()
+
+    @property
+    def theme_mode(self) -> str:
+        return self._theme_mode
     
+    @theme_mode.setter
+    def theme_mode(self, value: str):
+        self._theme_mode = value
+        self.save_config()
+
+    @property
+    def window_scale(self) -> float:
+        return float(self._window_scale)
+    
+    @window_scale.setter
+    def window_scale(self, value: float):
+        self._window_scale = float(value)
+        self.save_config()
+
+    @property
+    def font_name(self) -> str:
+        return self._font_name
+    
+    @font_name.setter
+    def font_name(self, value: str):
+        self._font_name = value
+        self.save_config()
+
+    @property
+    def wizard_completed(self) -> bool:
+        return self._wizard_completed
+
+    @wizard_completed.setter
+    def wizard_completed(self, value: bool):
+        self._wizard_completed = value
+        self.save_config()
+
+    @property
+    def app_mode(self) -> str:
+        return self._app_mode
+
+    @app_mode.setter
+    def app_mode(self, value: str):
+        self._app_mode = value
+        self.save_config()
+
     # === 辅助方法 ===
     
     def get_available_asr_engines(self) -> List[ModelInfo]:

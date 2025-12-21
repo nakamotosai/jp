@@ -4,8 +4,8 @@
       "id": "default",
       "name": "标准模式",
       "prompts": {
-        "idle_zh": "按住大写键说话",
-        "idle_jp": "按住大写键说话 → 日语",
+        "idle_zh": "按住快捷键说话",
+        "idle_jp": "按住快捷键说话 → 日语",
         "idle_tr": "请输入中文",
         "listening": "正在聆听...",
         "translating": "正在翻译...",
@@ -66,5 +66,5 @@
       }
     }
   ],
-  "current_scheme": "cute"
+  "current_scheme": "default"
 }

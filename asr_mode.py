@@ -7,7 +7,8 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurv
 from PyQt6.QtGui import QColor, QPainter, QIcon, QFontMetrics, QPen, QBrush, QFont
 
 from ui_manager import FontManager, LOGO_PATH, HotkeyDialog, VoiceWaveform
-from model_config import ASROutputMode
+from model_config import get_model_config, ASREngineType, TranslatorEngineType, ASROutputMode
+from startup_manager import StartupManager
 
 # Default fallbacks if needed
 DEFAULT_PLACEHOLDER = "按住大写键说话"
@@ -100,9 +101,12 @@ class ASRModeWindow(QWidget):
     requestFontChange = pyqtSignal(str)
     requestFontSizeChange = pyqtSignal(float)
     requestQuit = pyqtSignal()
+    requestAutoTTSChange = pyqtSignal(bool)
+    requestTTSDelayChange = pyqtSignal(int)
     requestPersonalityChange = pyqtSignal(str)
     requestHotkeyChange = pyqtSignal(str, str)
     requestRestart = pyqtSignal()
+    requestOpenSettings = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -166,7 +170,7 @@ class ASRModeWindow(QWidget):
         self.theme_mode = "Dark"
         self.window_scale = 1.0
         self.font_size_factor = 1.0
-        self.current_font_serif = True
+        self.current_font_name = "思源宋体"
         self._placeholder_color = "rgba(255,255,255,0.5)"
         self._text_color = "white"
         
@@ -220,15 +224,23 @@ class ASRModeWindow(QWidget):
         
         self._update_display_style()
 
-    def apply_scaling(self, scale, font_factor, serif=True):
+    def apply_scaling(self, scale, font_factor):
         self.window_scale = scale
         self.font_size_factor = font_factor
-        self.current_font_serif = serif
+        # removed overriding current_font_name logic
         self._update_display_style()
         self._update_size()
 
+    # Compatibility methods
+    def change_theme(self, theme): self.apply_theme(theme)
+    def set_font_name(self, name): 
+        self.current_font_name = name
+        self._update_display_style()
+    def set_scale_factor(self, scale):
+        self.apply_scaling(scale, self.font_size_factor)
+
     def _update_display_style(self):
-        family = FontManager.get_font(self.current_font_serif)
+        family = FontManager.get_correct_family(self.current_font_name)
         font_size = int(14 * self.font_size_factor)
         
         current_text = self.display.text()
@@ -302,12 +314,12 @@ class ASRModeWindow(QWidget):
 
     def update_status(self, status):
         current = self.display.text()
-        if "加载" in status or status == "loading":
-            self.display.setText(self.m_cfg.get_prompt("loading"))
-            self._update_display_style()
-        elif status == "idle" or "加载完成" in status:
+        if status == "idle" or "加载完成" in status or "就绪" in status:
             if self.m_cfg.is_placeholder_text(current):
                 self.update_segment(self.m_cfg.get_prompt("idle_zh"))
+        elif "加载" in status or status == "loading":
+            self.display.setText(self.m_cfg.get_prompt("loading"))
+            self._update_display_style()
         elif status == "asr_loading":
             self.display.setText(self.m_cfg.get_prompt("init"))
             self._update_display_style()
@@ -347,119 +359,33 @@ class ASRModeWindow(QWidget):
     def mouseReleaseEvent(self, e): self._dragging = False
 
     def contextMenuEvent(self, event):
-        from model_config import get_model_config, ASREngineType, TranslatorEngineType, ASROutputMode
-        config = get_model_config()
-        
-        menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: rgba(45, 45, 45, 0.98);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 6px;
-                padding: 4px;
-            }
-            QMenu::item {
-                color: #eeeeee;
-                padding: 6px 20px;
-                margin: 2px;
-                border-radius: 4px;
-                background: transparent;
-                text-align: left;
-            }
-            QMenu::item:selected {
-                background-color: rgba(255, 255, 255, 0.1);
-                color: white;
-            }
-            QMenu::item:checked {
-                color: #00ffcc;
-            }
-            QMenu::separator {
-                height: 1px;
-                background: rgba(255, 255, 255, 0.1);
-                margin: 4px 10px;
-            }
-            QMenu::right-arrow {
-                image: none;
-                width: 0px;
-                padding-right: 0px;
-            }
-        """)
-        
+        self.show_context_menu(event.globalPos())
+
+    def show_context_menu(self, global_pos):
+        menu = QMenu() # 不带 parent 以确保即便窗口隐藏时也能正常显示菜单
         # 1. 应用模式
         mode_menu = menu.addMenu("应用模式")
         modes = [("asr", "语音输入模式"), ("asr_jp", "日语语音模式"), ("translation", "文字翻译模式")]
+        current_mode = self.m_cfg.app_mode
         for m_id, m_name in modes:
-            action = mode_menu.addAction(m_name)
+            display_name = f"{m_name}{'        ✔' if m_id == current_mode else ''}"
+            action = mode_menu.addAction(display_name)
             action.triggered.connect(lambda checked, mid=m_id: self.requestAppModeChange.emit(mid))
-            
+        
         menu.addSeparator()
-
-        # 2. ASR 引擎
-        asr_menu = menu.addMenu("ASR 引擎")
-        for engine_id, info in self.m_cfg.ASR_MODELS.items():
-            if not info.available: continue
-            action = asr_menu.addAction(info.name)
-            action.setCheckable(True)
-            action.setChecked(self.m_cfg.current_asr_engine == engine_id)
-            action.triggered.connect(lambda checked, eid=engine_id: self.requestASREngineChange.emit(eid))
-            
-        # 3. 翻译引擎
-        trans_menu = menu.addMenu("翻译引擎")
-        for engine_id, info in self.m_cfg.TRANSLATOR_MODELS.items():
-            action = trans_menu.addAction(info.name)
-            action.setCheckable(True)
-            action.setChecked(self.m_cfg.current_translator_engine == engine_id)
-            action.triggered.connect(lambda checked, eid=engine_id: self.requestTranslatorEngineChange.emit(eid))
-            
-        # 4. 文本处理
-        clean_menu = menu.addMenu("文本处理")
-        raw_action = clean_menu.addAction("原始结果")
-        raw_action.setCheckable(True)
-        raw_action.setChecked(self.m_cfg.asr_output_mode == ASROutputMode.RAW.value)
-        raw_action.triggered.connect(lambda: self.requestASROutputModeChange.emit(ASROutputMode.RAW.value))
+        menu.addAction("详细设置").triggered.connect(self.requestOpenSettings.emit)
         
-        clean_action = clean_menu.addAction("智能清理")
-        clean_action.setCheckable(True)
-        clean_action.setChecked(self.m_cfg.asr_output_mode == ASROutputMode.CLEANED.value)
-        clean_action.triggered.connect(lambda: self.requestASROutputModeChange.emit(ASROutputMode.CLEANED.value))
-
+        is_on = StartupManager.is_enabled()
+        # 统一使用右侧文本标记勾选
+        autostart_text = f"开机自启{'        ✔' if is_on else ''}"
+        menu.addAction(autostart_text).triggered.connect(lambda: StartupManager.set_enabled(not is_on))
+        
         menu.addSeparator()
-        
-        # 5. 配置与显示
-        theme_menu = menu.addMenu("界面设置")
-        
-        theme_sub = theme_menu.addMenu("配色主题")
-        theme_sub.addAction("深色模式").triggered.connect(lambda: self.requestThemeChange.emit("Dark"))
-        theme_sub.addAction("浅色模式").triggered.connect(lambda: self.requestThemeChange.emit("Light"))
-        
-        scale_sub = theme_menu.addMenu("窗口缩放")
-        for s in [0.8, 1.0, 1.2, 1.5]:
-            scale_sub.addAction(f"{int(s*100)}%").triggered.connect(lambda checked, val=s: self.requestScaleChange.emit(val))
-            
-        font_sub = theme_menu.addMenu("全局字体")
-        font_sub.addAction("思源宋体").triggered.connect(lambda: self.requestFontChange.emit("思源宋体"))
-        font_sub.addAction("思源黑体").triggered.connect(lambda: self.requestFontChange.emit("思源黑体"))
-        
-        font_size_sub = theme_menu.addMenu("文字大小")
-        for s in [0.8, 1.0, 1.2, 1.5]:
-            font_size_sub.addAction(f"{int(s*100)}%").triggered.connect(lambda checked, val=s: self.requestFontSizeChange.emit(val))
-
-        menu.addAction("快捷键设置").triggered.connect(self._show_hotkey_dialog)
-
-        personality_menu = menu.addMenu("AI 个性风格")
-        for p_id, p_name in self.m_cfg.get_personality_schemes():
-            action = personality_menu.addAction(p_name)
-            action.setCheckable(True)
-            action.setChecked(self.m_cfg.personality.data.get("current_scheme") == p_id)
-            action.triggered.connect(lambda checked, pid=p_id: self.requestPersonalityChange.emit(pid))
-
-        menu.addSeparator()
-        
-        # 6. 系统操作
         menu.addAction("重启应用").triggered.connect(self.requestRestart.emit)
         menu.addAction("退出程序").triggered.connect(self.requestQuit.emit)
         
-        menu.exec(event.globalPos())
+        self.activateWindow() # 确保窗口激活，解决点击外部不消失的问题
+        menu.exec(global_pos)
 
     def _show_hotkey_dialog(self):
         asr = self.m_cfg.hotkey_asr
