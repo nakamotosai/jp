@@ -90,6 +90,11 @@ class AppController(QObject):
         self.sys_handler.start_focus_tracking()
         self.hotkey_mgr.start()
         
+        # 6. Hotkey Watchdog - Check status every 30 seconds
+        self.hotkey_watchdog = QTimer()
+        self.hotkey_watchdog.timeout.connect(self.check_hotkey_status)
+        self.hotkey_watchdog.start(30000)
+
         self.audio_recorder.started.connect(self.on_recording_state_changed)
         self.audio_recorder.stopped.connect(self.on_recording_state_changed)
         self.audio_recorder.audio_ready.connect(self.asr_manager.transcribe_async)
@@ -106,6 +111,12 @@ class AppController(QObject):
 
         self._caps_was_on = False
         self.handle_mode_change(self.app_mode)
+
+    def check_hotkey_status(self):
+        """Monitor the health of the hotkey listener and restart if dead."""
+        if not self.hotkey_mgr.is_alive():
+            print("[Watchdog] Hotkey listener died. Restarting...")
+            self.hotkey_mgr.start()
 
     def _get_active_window(self):
         if self.app_mode == "asr": return self.asr_window

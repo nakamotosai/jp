@@ -45,53 +45,65 @@ class HotkeyManager(QObject):
         return target_keys == pressed_keys
 
     def start(self):
+        if self.listener and self.listener.is_alive():
+            return
+        
         self.listener = keyboard.Listener(
             on_press=self._on_press,
             on_release=self._on_release
         )
         self.listener.start()
 
+    def is_alive(self):
+        return self.listener and self.listener.is_alive()
+
     def _on_press(self, key):
-        self.current_pressed.add(key)
-        
-        # 1. Check ASR (Hold mode) - Support both single key and combinations
-        if '+' in self.asr_key_str:
-            if self._is_match(self.asr_key_str):
-                if not self._asr_active:
-                    self._asr_active = True
-                    self.signals.asr_pressed.emit()
-        else:
-            if self._get_key_str(key) == self.asr_key_str:
-                if not self._asr_active:
-                    self._asr_active = True
-                    self.signals.asr_pressed.emit()
-                
-        # 2. Check UI Toggle (Combination or single key)
-        if '+' in self.toggle_ui_str:
-            if self._is_match(self.toggle_ui_str):
-                # UI toggle is usually a one-shot trigger on press
-                self.signals.toggle_ui.emit()
-        else:
-            if self._get_key_str(key) == self.toggle_ui_str:
-                self.signals.toggle_ui.emit()
+        try:
+            self.current_pressed.add(key)
+            
+            # 1. Check ASR (Hold mode) - Support both single key and combinations
+            if '+' in self.asr_key_str:
+                if self._is_match(self.asr_key_str):
+                    if not self._asr_active:
+                        self._asr_active = True
+                        self.signals.asr_pressed.emit()
+            else:
+                if self._get_key_str(key) == self.asr_key_str:
+                    if not self._asr_active:
+                        self._asr_active = True
+                        self.signals.asr_pressed.emit()
+                    
+            # 2. Check UI Toggle (Combination or single key)
+            if '+' in self.toggle_ui_str:
+                if self._is_match(self.toggle_ui_str):
+                    # UI toggle is usually a one-shot trigger on press
+                    self.signals.toggle_ui.emit()
+            else:
+                if self._get_key_str(key) == self.toggle_ui_str:
+                    self.signals.toggle_ui.emit()
+        except Exception as e:
+            print(f"[HotkeyManager] Error in _on_press: {e}")
 
     def _on_release(self, key):
-        k_str = self._get_key_str(key)
-        
-        # ASR Release logic
-        if self._asr_active:
-            # If any part of the combination is released, or the single key is released
-            if '+' in self.asr_key_str:
-                if k_str in self.asr_key_str.split('+'):
-                    self._asr_active = False
-                    self.signals.asr_released.emit()
-            else:
-                if k_str == self.asr_key_str:
-                    self._asr_active = False
-                    self.signals.asr_released.emit()
+        try:
+            k_str = self._get_key_str(key)
             
-        if key in self.current_pressed:
-            self.current_pressed.remove(key)
+            # ASR Release logic
+            if self._asr_active:
+                # If any part of the combination is released, or the single key is released
+                if '+' in self.asr_key_str:
+                    if k_str in self.asr_key_str.split('+'):
+                        self._asr_active = False
+                        self.signals.asr_released.emit()
+                else:
+                    if k_str == self.asr_key_str:
+                        self._asr_active = False
+                        self.signals.asr_released.emit()
+                
+            if key in self.current_pressed:
+                self.current_pressed.remove(key)
+        except Exception as e:
+            print(f"[HotkeyManager] Error in _on_release: {e}")
 
     def stop(self):
         if self.listener:
