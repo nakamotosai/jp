@@ -1,4 +1,4 @@
-import sys, os, ctypes, json
+import sys, os, ctypes, json, multiprocessing
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QObject, pyqtSignal, QThread, QTimer
 
@@ -41,7 +41,10 @@ class AppController(QObject):
         self.tray.set_mode_checked(self.app_mode)
         
         # 3. Hotkey Manager
-        self.hotkey_mgr = HotkeyManager()
+        self.hotkey_mgr = HotkeyManager(
+            asr_key_str=self.m_cfg.hotkey_asr,
+            toggle_ui_str=self.m_cfg.hotkey_toggle_ui
+        )
         
         # 4. Async Worker
         self.tr_thread = QThread()
@@ -52,6 +55,9 @@ class AppController(QObject):
         self.tr_worker.result_ready.connect(self.on_translation_finished)
         self.tr_worker.status_changed.connect(self.on_worker_status_changed)
         self.tr_thread.start()
+        
+        # 初始触发翻译引擎加载
+        QTimer.singleShot(0, lambda: self.sig_change_engine.emit(self.m_cfg.current_translator_engine))
         
         # 5. Connect UI Signals
         self.tray.signals.restartRequested.connect(self.restart_app)
@@ -74,6 +80,8 @@ class AppController(QObject):
             if hasattr(win, "requestRestart"): win.requestRestart.connect(self.restart_app)
             if hasattr(win, "requestQuit"): win.requestQuit.connect(self.app.quit)
             if hasattr(win, "requestPersonalityChange"): win.requestPersonalityChange.connect(self.handle_personality_change)
+            if hasattr(win, "requestHotkeyChange"): win.requestHotkeyChange.connect(self.handle_hotkey_change)
+
             
         if hasattr(self.tr_window, 'requestTranslation'):
             self.tr_window.requestTranslation.connect(self.handle_translation_request)
@@ -85,13 +93,15 @@ class AppController(QObject):
         self.audio_recorder.started.connect(self.on_recording_state_changed)
         self.audio_recorder.stopped.connect(self.on_recording_state_changed)
         self.audio_recorder.audio_ready.connect(self.asr_manager.transcribe_async)
+        self.audio_recorder.level_updated.connect(self.handle_audio_level)
         
         self.asr_manager.model_ready.connect(lambda: self.on_worker_status_changed("idle"))
         self.asr_manager.result_ready.connect(self.handle_asr_result)
         self.asr_manager.error.connect(lambda e: print(f"ASR Error: {e}"))
         
-        self.hotkey_mgr.signals.caps_pressed.connect(self.on_caps_down)
-        self.hotkey_mgr.signals.caps_released.connect(self.on_caps_up)
+        self.hotkey_mgr.signals.asr_pressed.connect(self.on_asr_down)
+        self.hotkey_mgr.signals.asr_released.connect(self.on_asr_up)
+        self.hotkey_mgr.signals.toggle_ui.connect(self.toggle_main_ui)
         self.on_worker_status_changed("asr_loading")
 
         self._caps_was_on = False
@@ -110,18 +120,24 @@ class AppController(QObject):
         self.tray.set_mode_checked(mode_id)
         self.save_config()
 
-    def on_caps_down(self):
-        self._caps_was_on = bool(ctypes.windll.user32.GetKeyState(0x14) & 1)
+    def on_asr_down(self):
         self.window.update_recording_status(True)
         self.audio_recorder.start_recording()
 
-    def on_caps_up(self):
+    def on_asr_up(self):
         self.window.update_recording_status(False)
         self.audio_recorder.stop_recording()
-        if ctypes.windll.user32.GetKeyState(0x14) & 1:
-            # If Caps Lock is still ON after release (which it shouldn't be for our toggle logic)
-            # We don't necessarily want to force it OFF unless it was OFF before.
-            pass
+
+    def toggle_main_ui(self):
+        is_visible = self.window.isVisible()
+        if is_visible:
+            for win in self.all_windows: win.hide()
+        else:
+            self.window.show()
+            self.window.activateWindow()
+            self.window.raise_()
+            if hasattr(self.window, "focus_input"):
+                self.window.focus_input()
 
     def handle_asr_result(self, result):
         if not result: return
@@ -145,6 +161,10 @@ class AppController(QObject):
         if not text: return
         self.sys_handler.paste_text(text)
 
+    def handle_audio_level(self, level):
+        if hasattr(self.window, "update_audio_level"):
+            self.window.update_audio_level(level)
+
     def on_worker_status_changed(self, status):
         for win in self.all_windows:
             if hasattr(win, "update_status"): win.update_status(status)
@@ -154,6 +174,7 @@ class AppController(QObject):
         self.save_config()
 
     def handle_engine_change(self, engine_id):
+        self.m_cfg.current_translator_engine = engine_id
         self.sig_change_engine.emit(engine_id)
         self.save_config()
 
@@ -188,6 +209,12 @@ class AppController(QObject):
         self.on_worker_status_changed("idle")
         self.save_config()
 
+    def handle_hotkey_change(self, asr_key, toggle_ui):
+        self.m_cfg.hotkey_asr = asr_key
+        self.m_cfg.hotkey_toggle_ui = toggle_ui
+        self.hotkey_mgr.set_hotkeys(asr_key, toggle_ui)
+        self.save_config()
+
     def save_config(self):
         m_cfg = self.m_cfg
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -201,7 +228,9 @@ class AppController(QObject):
                 "asr_engine": m_cfg.current_asr_engine,
                 "asr_output_mode": m_cfg.asr_output_mode,
                 "translator_engine": m_cfg.current_translator_engine,
-                "personality_scheme": m_cfg.personality.data.get("current_scheme")
+                "personality_scheme": m_cfg.personality.data.get("current_scheme"),
+                "hotkey_asr": m_cfg.hotkey_asr,
+                "hotkey_toggle_ui": m_cfg.hotkey_toggle_ui
             }
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
@@ -224,5 +253,11 @@ class AppController(QObject):
         sys.exit(self.app.exec())
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
+    
+    # 强制切换工作目录到脚本所在目录，防止 pyw 运行路径偏移
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(script_dir)
+    
     controller = AppController()
     controller.run()

@@ -1,11 +1,10 @@
-import os, json
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QGraphicsDropShadowEffect, 
-    QApplication, QLabel, QPushButton, QSlider, QFrame, QGridLayout, QMenu
+    QApplication, QLabel, QPushButton, QSlider, QFrame, QGridLayout, QMenu, QDialog, QLineEdit
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QEvent, QPoint, QTimer, QRect, QPropertyAnimation, QEasingCurve, pyqtProperty
-from PyQt6.QtGui import QColor, QFont, QPainter, QLinearGradient, QBrush, QFontDatabase, QFontMetrics, QPalette, QPainterPath, QIcon
-from model_config import ASROutputMode
+from PyQt6.QtGui import QColor, QFont, QPainter, QLinearGradient, QBrush, QFontDatabase, QFontMetrics, QPalette, QPainterPath, QIcon, QKeyEvent, QKeySequence
+import os, json, sys, time, random
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
@@ -296,6 +295,159 @@ class RainbowDivider(QWidget):
             gradient.setColorAt(pos, color)
         painter.fillRect(self.rect(), QBrush(gradient))
 
+class VoiceWaveform(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(30)
+        self.setMinimumWidth(100)
+        self._levels = [0.1] * 6
+        self._target_levels = [0.1] * 6
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._animate)
+        self.timer.start(30)
+        self.bar_color = QColor(100, 100, 100) # 深灰色
+
+    def set_level(self, rms):
+        # Normalize RMS (roughly 0 to 1000+) to 0.1 - 1.0
+        normalized = max(0.1, min(1.0, rms / 800.0))
+        for i in range(len(self._target_levels)):
+            variation = random.uniform(0.7, 1.3)
+            self._target_levels[i] = normalized * variation
+
+    def _animate(self):
+        changed = False
+        for i in range(len(self._levels)):
+            if abs(self._levels[i] - self._target_levels[i]) > 0.01:
+                # Smooth transition
+                self._levels[i] += (self._target_levels[i] - self._levels[i]) * 0.3
+                changed = True
+            else:
+                # Slight decay if no input
+                self._target_levels[i] *= 0.95
+        if changed:
+            self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        w = self.width()
+        h = self.height()
+        n = len(self._levels)
+        bar_w = 4
+        spacing = 8
+        total_w = n * bar_w + (n-1) * spacing
+        start_x = (w - total_w) / 2
+
+        for i in range(n):
+            bar_h = h * self._levels[i] * 0.8
+            bar_h = max(4, bar_h)
+            x = start_x + i * (bar_w + spacing)
+            y = (h - bar_h) / 2
+            
+            # Draw rounded bar
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(self.bar_color))
+            painter.drawRoundedRect(int(x), int(y), int(bar_w), int(bar_h), 2, 2)
+
+class HotkeyDialog(QDialog):
+    def __init__(self, parent=None, current_asr="", current_toggle=""):
+        super().__init__(parent)
+        self.setWindowTitle("快捷键设置")
+        self.setFixedSize(320, 260)
+        self.setStyleSheet("""
+            QDialog { background-color: #f5f5f7; border-radius: 12px; }
+            QLabel { color: #333333; font-weight: bold; font-family: "思源黑体"; font-size: 13px; }
+            QLabel#instruction { color: #666666; font-weight: normal; font-size: 11px; }
+            QPushButton { 
+                background-color: #007aff; color: white; border-radius: 6px; padding: 10px; 
+                font-weight: bold; border: none; font-size: 13px;
+            }
+            QPushButton:hover { background-color: #0063cc; }
+            QLineEdit { 
+                border: 2px solid #ddd; border-radius: 6px; padding: 8px; background: white; 
+                font-weight: bold; color: #333333; font-size: 14px;
+            }
+            QLineEdit:focus { border-color: #007aff; background-color: #f0f7ff; }
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(25, 25, 25, 25)
+        layout.setSpacing(10)
+        
+        instr = QLabel("点击输入框后按下键盘按键即可设置:")
+        instr.setObjectName("instruction")
+        layout.addWidget(instr)
+        layout.addSpacing(5)
+        
+        layout.addWidget(QLabel("按住说话热键:"))
+        self.asr_input = QLineEdit(current_asr)
+        self.asr_input.setReadOnly(True)
+        self.asr_input.setPlaceholderText("点击以录制...")
+        self.asr_input.installEventFilter(self)
+        layout.addWidget(self.asr_input)
+        
+        layout.addSpacing(5)
+        layout.addWidget(QLabel("显示/隐藏界面:"))
+        self.toggle_input = QLineEdit(current_toggle)
+        self.toggle_input.setReadOnly(True)
+        self.toggle_input.setPlaceholderText("点击以录制...")
+        self.toggle_input.installEventFilter(self)
+        layout.addWidget(self.toggle_input)
+        
+        layout.addStretch()
+        btn_layout = QHBoxLayout()
+        save_btn = QPushButton("保存设置")
+        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        save_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setStyleSheet("background-color: #e5e5ea; color: #333333;")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+        btn_layout.addWidget(save_btn)
+        layout.addLayout(btn_layout)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.KeyPress:
+            if not isinstance(event, QKeyEvent): return False
+            key = event.key()
+            mod = event.modifiers()
+            
+            # Handle Escape to cancel recording/lose focus
+            if key == Qt.Key.Key_Escape:
+                obj.clearFocus()
+                return True
+
+            parts = []
+            # Modifier detection
+            if mod & Qt.KeyboardModifier.ControlModifier: parts.append("ctrl")
+            if mod & Qt.KeyboardModifier.AltModifier: parts.append("alt")
+            if mod & Qt.KeyboardModifier.ShiftModifier: parts.append("shift")
+            if mod & Qt.KeyboardModifier.MetaModifier or key == Qt.Key.Key_Meta:
+                if "meta" not in parts: parts.append("meta")
+            
+            # Non-modifier key detection
+            if key not in [Qt.Key.Key_Control, Qt.Key.Key_Alt, Qt.Key.Key_Shift, Qt.Key.Key_Meta]:
+                # Special mapping
+                if key == Qt.Key.Key_CapsLock:
+                    kn = "caps_lock"
+                elif key == Qt.Key.Key_Space:
+                    kn = "space"
+                else:
+                    kn = QKeySequence(key).toString().lower()
+                
+                if kn and kn not in parts:
+                    parts.append(kn)
+            
+            if parts:
+                obj.setText("+".join(parts))
+            return True
+        return super().eventFilter(obj, event)
+
+    def get_values(self):
+        return self.asr_input.text(), self.toggle_input.text()
+
 class TranslatorWindow(QWidget):
     requestTranslation = pyqtSignal(str)
     requestSend = pyqtSignal(str)
@@ -310,6 +462,7 @@ class TranslatorWindow(QWidget):
     requestRecordStart = pyqtSignal()
     requestRecordStop = pyqtSignal()
     requestPersonalityChange = pyqtSignal(str)
+    requestHotkeyChange = pyqtSignal(str, str)
     requestRestart = pyqtSignal()
     requestQuit = pyqtSignal()
 
@@ -340,7 +493,7 @@ class TranslatorWindow(QWidget):
         self.top_layout.setSpacing(10)
         self.top_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.jp_badge = Badge("日>", "rgba(0,0,0,0.1)", "white")
-        self.jp_display = ScaledTextEdit(self, self.m_cfg.get_prompt("idle_tr_res") or "入力をください", "white")
+        self.jp_display = ScaledTextEdit(self, self.m_cfg.get_prompt("idle_tr_res") or "等待输入...", "white")
         self.jp_display.setReadOnly(False) 
         self.jp_display.viewport().setCursor(Qt.CursorShape.ArrowCursor) 
         self.jp_display.sizeHintChanged.connect(self._handle_resizing)
@@ -367,6 +520,9 @@ class TranslatorWindow(QWidget):
         self.zh_input.submitPressed.connect(self._on_submit)
         self.bottom_layout.addWidget(self.zh_badge); self.bottom_layout.addWidget(self.zh_input)
         
+        self.top_section.installEventFilter(self)
+        self.bottom_section.installEventFilter(self)
+
         self.clear_btn = ClearButton(self)
         self.clear_btn.clicked.connect(self.clear_input_forced)
         self.bottom_layout.addWidget(self.clear_btn)
@@ -374,6 +530,11 @@ class TranslatorWindow(QWidget):
         self.voice_btn.pressed.connect(self._handle_record_start)
         self.voice_btn.released.connect(self._handle_record_stop)
         self.bottom_layout.addWidget(self.voice_btn)
+        
+        # Waveform Overlay
+        self.waveform = VoiceWaveform(self)
+        self.waveform.setVisible(False)
+        
         self.container_layout.addWidget(self.bottom_section)
         self.bottom_fade = FadingOverlay(False, self.bottom_section)
 
@@ -440,6 +601,11 @@ class TranslatorWindow(QWidget):
         self.top_fade.move(0, 0)
         self.bottom_fade.setFixedWidth(int(visible_w))
         self.bottom_fade.move(0, 0)
+        
+        # Position waveform over the input area if visible
+        if self.waveform.isVisible():
+            self.waveform.setFixedWidth(self.zh_input.width())
+            self.waveform.move(self.zh_input.pos())
 
     def _apply_scaling(self):
         s = self.window_scale
@@ -466,6 +632,8 @@ class TranslatorWindow(QWidget):
         self.zh_badge.update_style(bottom_badge_bg, bottom_text); self.zh_input.update_style(bottom_text)
         self.top_fade.set_color(top_bg)
         self.bottom_fade.set_color(bottom_bg)
+        self.waveform.bar_color = QColor(100, 100, 100) if self.theme_mode == "Light" else QColor(204, 204, 204)
+        
         voice_bg = QColor(0, 0, 0, 15) if self.theme_mode == "Light" else QColor(255, 255, 255, 15)
         voice_icon = QColor(100, 100, 100) if self.theme_mode == "Light" else QColor(200, 200, 200)
         self.voice_btn.bg_color = voice_bg
@@ -563,6 +731,8 @@ class TranslatorWindow(QWidget):
         font_size_sub = theme_menu.addMenu("文字大小")
         for s in [0.8, 1.0, 1.2, 1.5]:
             font_size_sub.addAction(f"{int(s*100)}%").triggered.connect(lambda checked, val=s: self.requestFontSizeChange.emit(val))
+        
+        menu.addAction("快捷键设置").triggered.connect(self._show_hotkey_dialog)
 
         personality_menu = menu.addMenu("AI 个性风格")
         for p_id, p_name in self.m_cfg.get_personality_schemes():
@@ -576,16 +746,45 @@ class TranslatorWindow(QWidget):
         menu.addAction("退出程序").triggered.connect(self.requestQuit.emit)
         menu.exec(event.globalPos())
 
+    def _show_hotkey_dialog(self):
+        asr = self.m_cfg.hotkey_asr
+        toggle = self.m_cfg.hotkey_toggle_ui
+        dlg = HotkeyDialog(self, asr, toggle)
+        if dlg.exec():
+            new_asr, new_toggle = dlg.get_values()
+            if new_asr or new_toggle:
+                self.requestHotkeyChange.emit(new_asr, new_toggle)
+
     def change_theme(self, t): self.theme_mode = t; self._apply_theme()
     def change_scale(self, s): self.window_scale = s; self._apply_scaling()
     def change_font(self, f): self.current_font_name = f; self._apply_scaling()
     def change_font_size(self, f): self.font_size_factor = f; self._apply_scaling()
     def _on_submit(self): self.requestSend.emit(self.jp_display.toPlainText())
+
+    def _start_drag(self, pos):
+        self._dragging = True
+        self._drag_pos = pos - self.pos()
+
     def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton: self._dragging, self._drag_pos = True, e.globalPosition().toPoint() - self.pos()
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._start_drag(e.globalPosition().toPoint())
+
     def mouseMoveEvent(self, e):
-        if hasattr(self, '_dragging') and self._dragging: self.move(e.globalPosition().toPoint() - self._drag_pos)
-    def mouseReleaseEvent(self, e): self._dragging = False
+        if hasattr(self, '_dragging') and self._dragging:
+            self.move(e.globalPosition().toPoint() - self._drag_pos)
+
+    def mouseReleaseEvent(self, e):
+        self._dragging = False
+
+    def eventFilter(self, obj, event):
+        # Forward mouse press from sections to the window for dragging
+        if obj in [self.top_section, self.bottom_section]:
+            if event.type() == QEvent.Type.MouseButtonPress:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    self._start_drag(event.globalPosition().toPoint())
+                    return True
+        return super().eventFilter(obj, event)
+
     def _on_text_changed(self): 
         self.debounce_timer.start(300)
         if self.zh_input.toPlainText().strip():
@@ -608,13 +807,21 @@ class TranslatorWindow(QWidget):
             self.auto_clear_timer.start()
     def update_recording_status(self, is_recording):
         self.voice_btn.set_recording(is_recording)
+        self.zh_input.setVisible(not is_recording)
+        self.waveform.setVisible(is_recording)
         if is_recording:
+            self.waveform.setFixedWidth(self.zh_input.width())
+            self.waveform.move(self.zh_input.pos())
             self.auto_clear_timer.stop()
             if not self.zh_input.toPlainText(): self.zh_input.setPlaceholderText(self.m_cfg.get_prompt("listening"))
         else: 
             self.zh_input.setPlaceholderText(self.m_cfg.get_prompt("idle_tr"))
             if self.zh_input.toPlainText().strip():
                 self.auto_clear_timer.start()
+
+    def update_audio_level(self, level):
+        if self.waveform.isVisible():
+            self.waveform.set_level(level)
     def on_translation_ready(self, t): 
         self.jp_display.setPlaceholderText(self.m_cfg.get_prompt("idle_tr_res") or "等待输入..."); 
         self.jp_display.setPlainText(t); 

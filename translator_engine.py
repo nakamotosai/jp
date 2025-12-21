@@ -422,9 +422,19 @@ class TranslatorEngine(QObject):
     
     def set_mode(self, mode: str):
         """设置翻译模式"""
+        prev_mode = self.mode
         self.mode = mode
-        if mode == "local" and not self.local_is_ready:
-            self._start_local_engine()
+        
+        if mode == "online":
+            if prev_mode == "local":
+                self._unload_current_engine()
+        elif mode == "local":
+            current_id = self.config.current_translator_engine
+            # If not loaded, or the loaded model is different from the target, trigger reload
+            if not self.local_is_ready or self._current_engine_type != current_id:
+                if self.local_is_ready:
+                    self._unload_current_engine()
+                self._start_local_engine()
     
     def switch_engine(self, engine_type: str):
         """切换翻译引擎"""
@@ -610,11 +620,10 @@ class TranslationWorker(QObject):
     def on_engine_change_requested(self, engine_id: str):
         try:
             self.status_changed.emit("loading")
-            self.engine.set_mode("local")
-            # The actual heavy loading happens in set_mode or when engine.translate is called
-            # but ModelConfig says what model to use.
-            # Usually we need to notify the engine to reload.
-            # In current TranslatorEngine, it seems to load based on ModelConfig.
+            if engine_id == "online":
+                self.engine.set_mode("online")
+            else:
+                self.engine.set_mode("local")
         except Exception as e:
             print(f"[TranslationWorker] Engine change error: {e}")
 

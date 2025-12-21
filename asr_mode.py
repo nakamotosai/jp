@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve, pyqtProperty
 from PyQt6.QtGui import QColor, QPainter, QIcon, QFontMetrics, QPen, QBrush, QFont
 
-from ui_manager import FontManager, LOGO_PATH
+from ui_manager import FontManager, LOGO_PATH, HotkeyDialog, VoiceWaveform
 from model_config import ASROutputMode
 
 # Default fallbacks if needed
@@ -101,6 +101,7 @@ class ASRModeWindow(QWidget):
     requestFontSizeChange = pyqtSignal(float)
     requestQuit = pyqtSignal()
     requestPersonalityChange = pyqtSignal(str)
+    requestHotkeyChange = pyqtSignal(str, str)
     requestRestart = pyqtSignal()
 
     def __init__(self):
@@ -142,6 +143,10 @@ class ASRModeWindow(QWidget):
         self.display.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.display.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
+        # Waveform
+        self.waveform = VoiceWaveform(self)
+        self.waveform.setVisible(False)
+        
         # Buttons
         self.clear_btn = ASRIconButton(self, "clear")
         self.clear_btn.clicked.connect(self.clear_input)
@@ -153,6 +158,7 @@ class ASRModeWindow(QWidget):
         
         # Add to layout
         self.container_layout.addWidget(self.display, 1)
+        self.container_layout.addWidget(self.waveform, 1)
         self.container_layout.addWidget(self.clear_btn)
         self.container_layout.addWidget(self.voice_btn)
 
@@ -210,6 +216,8 @@ class ASRModeWindow(QWidget):
         self.voice_btn.icon_color = btn_icon
         self.voice_btn.update()
         
+        self.waveform.bar_color = QColor(100, 100, 100) if theme == "Light" else QColor(200, 200, 200)
+        
         self._update_display_style()
 
     def apply_scaling(self, scale, font_factor, serif=True):
@@ -250,10 +258,9 @@ class ASRModeWindow(QWidget):
 
     def _update_size(self):
         s = self.window_scale
-        base_w = 220 * s
-        content_w = self.container_layout.sizeHint().width() + 40
-        w = max(base_w, content_w)
-        self.setFixedWidth(int(w + 50))
+        # 固定宽度，不再随内容抖动
+        fixed_w = int(320 * s)
+        self.setFixedWidth(fixed_w + 50)
         
         self.base_height = int(48 * s)
         self.expanded_height = int(100 * s)
@@ -313,6 +320,9 @@ class ASRModeWindow(QWidget):
 
     def update_recording_status(self, is_recording):
         self.voice_btn.set_recording(is_recording)
+        self.waveform.setVisible(is_recording)
+        self.display.setVisible(not is_recording)
+        
         current = self.display.text()
         if is_recording:
             self.auto_clear_timer.stop()
@@ -323,6 +333,10 @@ class ASRModeWindow(QWidget):
                 self.update_segment(self.m_cfg.get_prompt("idle_zh"))
             elif current not in [self.m_cfg.get_prompt("idle_zh"), ""]:
                 self.auto_clear_timer.start()
+
+    def update_audio_level(self, level):
+        if self.waveform.isVisible():
+            self.waveform.set_level(level)
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton: 
@@ -430,6 +444,8 @@ class ASRModeWindow(QWidget):
         for s in [0.8, 1.0, 1.2, 1.5]:
             font_size_sub.addAction(f"{int(s*100)}%").triggered.connect(lambda checked, val=s: self.requestFontSizeChange.emit(val))
 
+        menu.addAction("快捷键设置").triggered.connect(self._show_hotkey_dialog)
+
         personality_menu = menu.addMenu("AI 个性风格")
         for p_id, p_name in self.m_cfg.get_personality_schemes():
             action = personality_menu.addAction(p_name)
@@ -444,3 +460,12 @@ class ASRModeWindow(QWidget):
         menu.addAction("退出程序").triggered.connect(self.requestQuit.emit)
         
         menu.exec(event.globalPos())
+
+    def _show_hotkey_dialog(self):
+        asr = self.m_cfg.hotkey_asr
+        toggle = self.m_cfg.hotkey_toggle_ui
+        dlg = HotkeyDialog(self, asr, toggle)
+        if dlg.exec():
+            new_asr, new_toggle = dlg.get_values()
+            if new_asr or new_toggle:
+                self.requestHotkeyChange.emit(new_asr, new_toggle)

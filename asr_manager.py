@@ -104,6 +104,16 @@ def onnx_inference_worker(model_path, input_queue, output_queue):
     try:
         import sys
         
+        # 在 pyw 模式下，sys.stdout 可能为 None，导致 print 崩溃
+        # 即使不需要日志，也建议重定向到 devnull 或日志文件
+        try:
+            log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "asr_process.log")
+            # 始终开启简单日志以防崩溃，并方便排查
+            sys.stdout = open(log_file_path, "a", encoding="utf-8")
+            sys.stderr = sys.stdout
+        except:
+            pass
+
         # 判断是否为 Sherpa-ONNX 模型
         use_sherpa = "sherpa" in model_path.lower()
         
@@ -125,7 +135,10 @@ def onnx_inference_worker(model_path, input_queue, output_queue):
             
             if not os.path.exists(model_file) or not os.path.exists(tokens_file):
                 raise FileNotFoundError(f"Sherpa模型文件缺失: {model_file} 或 {tokens_file}")
-                
+
+            print(f"Sherpa model found? {os.path.exists(model_file)}")
+            print(f"Sherpa tokens found? {os.path.exists(tokens_file)}")
+            
             recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
                 model=model_file,
                 tokens=tokens_file,

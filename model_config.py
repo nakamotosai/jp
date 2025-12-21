@@ -28,6 +28,7 @@ class TranslatorEngineType(Enum):
     NLLB_1_2B_CT2 = "nllb_1_2b_ct2"     # 1.2B高质量版(ctranslate2)
     NLLB_600M_CT2 = "nllb_600m_ct2"     # 600M标准版(ctranslate2)
     NLLB_ORIGINAL = "nllb_original"     # 原始版(transformers)
+    GOOGLE = "online"                   # Google 在线翻译
 
 
 @dataclass
@@ -133,12 +134,21 @@ class ModelConfig:
             engine_type=TranslatorEngineType.NLLB_ORIGINAL.value,
             loader="transformers"
         ),
+        TranslatorEngineType.GOOGLE.value: ModelInfo(
+            name="Google 在线翻译 (推荐/快速)",
+            path="",
+            engine_type=TranslatorEngineType.GOOGLE.value,
+            loader="online",
+            available=True
+        ),
     }
     
     def __init__(self):
         self._current_asr_engine = ASREngineType.SENSEVOICE_ONNX.value  # 使用 Sherpa-ONNX 默认
-        self._current_translator_engine = TranslatorEngineType.NLLB_600M_CT2.value
+        self._current_translator_engine = TranslatorEngineType.GOOGLE.value
         self._asr_output_mode = ASROutputMode.RAW.value
+        self._hotkey_asr = "caps_lock"
+        self._hotkey_toggle_ui = "alt+z"
         self.data = {}
         self._load_config()
         self._scan_models()
@@ -153,6 +163,8 @@ class ModelConfig:
                     self._current_asr_engine = self.data.get('asr_engine', self._current_asr_engine)
                     self._current_translator_engine = self.data.get('translator_engine', self._current_translator_engine)
                     self._asr_output_mode = self.data.get('asr_output_mode', self._asr_output_mode)
+                    self._hotkey_asr = self.data.get('hotkey_asr', self._hotkey_asr)
+                    self._hotkey_toggle_ui = self.data.get('hotkey_toggle_ui', self._hotkey_toggle_ui)
         except Exception as e:
             print(f"[ModelConfig] 加载配置失败: {e}")
     
@@ -167,6 +179,8 @@ class ModelConfig:
             config['asr_engine'] = self._current_asr_engine
             config['translator_engine'] = self._current_translator_engine
             config['asr_output_mode'] = self._asr_output_mode
+            config['hotkey_asr'] = self._hotkey_asr
+            config['hotkey_toggle_ui'] = self._hotkey_toggle_ui
             
             with open(self.CONFIG_PATH, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
@@ -340,6 +354,24 @@ class ModelConfig:
         if value in [m.value for m in ASROutputMode]:
             self._asr_output_mode = value
             self.save_config()
+
+    @property
+    def hotkey_asr(self) -> str:
+        return self._hotkey_asr
+
+    @hotkey_asr.setter
+    def hotkey_asr(self, value: str):
+        self._hotkey_asr = value
+        self.save_config()
+
+    @property
+    def hotkey_toggle_ui(self) -> str:
+        return self._hotkey_toggle_ui
+
+    @hotkey_toggle_ui.setter
+    def hotkey_toggle_ui(self, value: str):
+        self._hotkey_toggle_ui = value
+        self.save_config()
     
     # === 辅助方法 ===
     
