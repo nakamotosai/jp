@@ -142,7 +142,7 @@ class ASRModeWindow(QWidget):
         self.container.setObjectName("asr_container")
         
         self.container_layout = QHBoxLayout(self.container)
-        self.container_layout.setContentsMargins(15, 0, 5, 0) 
+        self.container_layout.setContentsMargins(15, 0, 15, 0) # Adjusted right margin
         self.container_layout.setSpacing(0)
         self.container_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         
@@ -168,17 +168,14 @@ class ASRModeWindow(QWidget):
         self.waveform = VoiceWaveform(self)
         self.waveform.setVisible(False)
         
-        # Clear button - parented to container for absolute positioning
-        self.clear_btn = ClearButton(self.container)
-        self.clear_btn.clicked.connect(self.clear_input)
+
         
-        self.voice_btn = ASRIconButton(self, "mic")
-        self.voice_btn.pressed.connect(self.requestRecordStart.emit)
-        self.voice_btn.released.connect(self.requestRecordStop.emit)
+
         
         # Slot machine label for initial animation - 默认使用灰色
         self.slot_label = SlotMachineLabel(self, self.m_cfg.get_prompt("idle_zh"), "rgba(255,255,255,0.5)")
         self.slot_label.set_character_set("zh")
+
         self.slot_label.setVisible(False)
         self.slot_label.animationFinished.connect(self._on_animation_finished)
         
@@ -186,7 +183,7 @@ class ASRModeWindow(QWidget):
         self.container_layout.addWidget(self.display, 1)
         self.container_layout.addWidget(self.slot_label, 1)
         self.container_layout.addWidget(self.waveform, 1)
-        self.container_layout.addWidget(self.voice_btn)
+
 
         self.container.installEventFilter(self)
         self.display.installEventFilter(self)
@@ -194,7 +191,7 @@ class ASRModeWindow(QWidget):
         self.theme_mode = "Dark"
         self.window_scale = 1.0
         self.font_size_factor = 1.0
-        self.current_font_name = "思源宋体"
+        self.current_font_name = self.m_cfg.font_name
         self._placeholder_color = "rgba(255,255,255,0.5)"
         self._text_color = "white"
         
@@ -214,6 +211,16 @@ class ASRModeWindow(QWidget):
         self.auto_clear_timer.setInterval(5000)
         self.auto_clear_timer.timeout.connect(self.clear_input)
 
+        # 5秒自动循环播放动画定时器
+        self.idle_timer = QTimer(self)
+        self.idle_timer.setSingleShot(True)
+        self.idle_timer.setInterval(5000)
+        self.idle_timer.timeout.connect(self._trigger_idle_anim)
+        
+        # 闲置文案循环
+        self._idle_texts = [self.m_cfg.get_prompt("idle_zh"), "快捷键 Win+Ctrl", "欢迎使用中日说"]
+        self._idle_text_index = 0
+
         self.apply_theme()
         self._update_size()
 
@@ -225,7 +232,7 @@ class ASRModeWindow(QWidget):
             self._placeholder_color = "rgba(0,0,0,0.4)"
         else:
             bg = "rgba(45, 45, 45, 0.98)"
-            self._text_color = "white"
+            self._text_color = "rgba(255,255,255,0.5)"
             self._placeholder_color = "rgba(255,255,255,0.5)"
         
         r = int(12 * self.window_scale)
@@ -237,14 +244,11 @@ class ASRModeWindow(QWidget):
             }}
         """)
         
+        
         btn_bg = QColor(0,0,0,40) if theme=="Light" else QColor(255,255,255,25)
         btn_icon = QColor(100,100,100) if theme=="Light" else QColor(200,200,200)
         
-        self.clear_btn.update_style(theme)
-        
-        self.voice_btn.bg_color = btn_bg
-        self.voice_btn.icon_color = btn_icon
-        self.voice_btn.update()
+
         
         self.waveform.bar_color = QColor(100, 100, 100) if theme == "Light" else QColor(200, 200, 200)
         
@@ -253,8 +257,7 @@ class ASRModeWindow(QWidget):
     def apply_scaling(self, scale, font_factor):
         self.window_scale = scale
         self.font_size_factor = font_factor
-        self.voice_btn.apply_scale(scale)
-        self.clear_btn.apply_scale(scale)
+
         self.slot_label.apply_scale(scale, font_factor=font_factor)
         self._update_display_style()
         self._update_size()
@@ -271,10 +274,16 @@ class ASRModeWindow(QWidget):
         family = FontManager.get_correct_family(self.current_font_name)
         font_size = int(14 * self.font_size_factor)
         current_text = self.display.toPlainText()
-        loading_msgs = [self.m_cfg.get_prompt("loading"), self.m_cfg.get_prompt("init")]
-        placeholders = [self.m_cfg.get_prompt("idle_zh"), self.m_cfg.get_prompt("listening")] + loading_msgs
-        is_placeholder = current_text in placeholders or current_text == ""
-        color = self._placeholder_color if is_placeholder else self._text_color
+        # Determine color based on content
+        if not current_text:
+            color = self._placeholder_color
+            self.display.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        elif current_text in self._idle_texts or current_text == self.m_cfg.get_prompt("listening"):
+            color = self._placeholder_color
+            self.display.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        else:
+            color = self._text_color
+            self.display.setAlignment(Qt.AlignmentFlag.AlignLeft)
         
         self.display.set_text_color(color)
         self.display.apply_scale(self.window_scale, family, self.font_size_factor)
@@ -283,42 +292,55 @@ class ASRModeWindow(QWidget):
         self.slot_label.set_text_color(self._placeholder_color)
         self.slot_label.apply_scale(self.window_scale, family, self.font_size_factor)
 
-    def _needs_expansion(self, text):
-        loading_msgs = [self.m_cfg.get_prompt("loading"), self.m_cfg.get_prompt("init")]
-        if text in [self.m_cfg.get_prompt("idle_zh"), self.m_cfg.get_prompt("listening"), ""] + loading_msgs:
-            return False
-        font = self.display.font()
-        fm = QFontMetrics(font)
-        available_width = int(300 * self.window_scale) - int(50 * self.window_scale) # Adjusted for padding and mic button
-        text_width = fm.horizontalAdvance(text)
-        return text_width > available_width or "\n" in text
+
 
     def _update_size(self):
         s = self.window_scale
-        fixed_w = int(320 * s)
-        self.setFixedWidth(fixed_w + int(50 * s))
-        self.base_height = int(52 * s)
-        self.expanded_height = int(100 * s)
-        text = self.display.toPlainText()
-        needs_expand = self._needs_expansion(text)
+        base_w = int(200 * s)
+        if base_w < 100: base_w = 100 # 最小宽度保护
+        base_h = int(52 * s)
         
-        if needs_expand != self.is_expanded:
-            self.is_expanded = needs_expand
-            target_container_h = self.expanded_height if needs_expand else self.base_height
-            target_window_h = target_container_h + 50
+        # 1. 强制设定显示区域宽度，确保折行计算正确
+        # Window width = base_w + 50 (margins 25*2)
+        # Container width = Window width - 50 = base_w
+        # Display width = Container width - 30 (margins 15*2)
+        display_w = base_w - int(30 * s)
+        self.display.setFixedWidth(display_w)
+        
+        # 2. 获取文档真实高度
+        doc_h = self.display.document().size().height()
+        
+        # 3. 计算目标容器高度 (doc_h + 上下padding)
+        # 上下留白给一点，避免贴边
+        padding_v = int(24 * s) 
+        target_h = max(base_h, int(doc_h + padding_v))
+        
+        # 4. 限制最大高度
+        target_h = min(target_h, int(800 * s))
+        
+        # 5. 设置窗口宽度
+        window_w = base_w + int(50 * s)
+        self.setFixedWidth(window_w)
+        
+        # 6. 高度动画
+        current_h = self.container.height()
+        target_win_h = target_h + 50 # Window height including shadow margins
+        
+        # 如果高度变化显著 (>2px)，则执行动画
+        if abs(target_h - current_h) > 2:
             self.height_anim.stop()
             self.height_anim.setStartValue(self.height())
-            self.height_anim.setEndValue(target_window_h)
+            self.height_anim.setEndValue(target_win_h)
             self.height_anim.start()
-            self.container.setMinimumHeight(target_container_h)
-            self.container.setMaximumHeight(target_container_h)
+            
+            self.container.setMinimumHeight(target_h)
+            self.container.setMaximumHeight(target_h)
         else:
-            target_container_h = self.expanded_height if self.is_expanded else self.base_height
-            target_window_h = target_container_h + 50
-            self.setMinimumHeight(target_window_h)
-            self.setMaximumHeight(target_window_h)
-            self.container.setMinimumHeight(target_container_h)
-            self.container.setMaximumHeight(target_container_h)
+            # 直接应用
+            self.setMinimumHeight(target_win_h)
+            self.setMaximumHeight(target_win_h)
+            self.container.setMinimumHeight(target_h)
+            self.container.setMaximumHeight(target_h)
 
     def update_segment(self, text):
         # 如果正在进行动画，且现在有真正文本输入，强制停止动画
@@ -328,55 +350,56 @@ class ASRModeWindow(QWidget):
             
         self.display.setPlainText(text)
         self._update_display_style()
-        is_real_text = text not in [self.m_cfg.get_prompt("idle_zh"), self.m_cfg.get_prompt("listening"), ""]
-        self.clear_btn.setVisible(is_real_text)
         self._update_size()
-        self._update_clear_btn_pos()
+        
+        if not text:
+            # Empty text
+
+            is_real_text = False
+        else:
+            # Check if text is one of the idle placeholders or listening prompt
+            is_placeholder = text in self._idle_texts or text == self.m_cfg.get_prompt("listening")
+
+            is_real_text = not is_placeholder
         
         if is_real_text:
             self.auto_clear_timer.start()
+            self.idle_timer.stop()
         else:
             self.auto_clear_timer.stop()
+            # 只有当内容是任意一个 idle_texts 时才启动循环
+            if text in self._idle_texts:
+                self.idle_timer.start()
+            else:
+                self.idle_timer.stop()
 
-    def _update_clear_btn_pos(self):
-        """Position X button immediately after text end"""
-        if not self.display.toPlainText() or not self.clear_btn.isVisible():
-            return
-            
-        cursor = self.display.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        rect = self.display.cursorRect(cursor)
-        
-        viewport_pos = self.display.viewport().mapTo(self.container, rect.topRight())
-        
-        s = self.window_scale
-        x = viewport_pos.x() + int(10 * s)
-        y = viewport_pos.y() + (rect.height() - self.clear_btn.height()) // 2
-        
-        # Guard against mic button
-        max_x = self.container.width() - int(60 * s)
-        if x > max_x: x = max_x
-            
-        self.clear_btn.move(x, y)
-        self.clear_btn.raise_()
 
     def update_status(self, status):
+        # [FIX] 如果正在录音，绝对不要更新文字状态/显示占位符
+        if self.waveform.isVisible():
+            return
+
         current = self.display.toPlainText()
         if status == "idle" or "加载完成" in status or "就绪" in status:
             if self.slot_label.isVisible():
                 # 加载完毕，开始逐字归位
                 self.slot_label.settle_one_by_one(start_delay=300)
-            elif self.m_cfg.is_placeholder_text(current):
+            elif self.m_cfg.is_placeholder_text(current) and current not in self._idle_texts:
+                # 只有当当前显示的是旧的占位符时，才重置
                 self.update_segment(self.m_cfg.get_prompt("idle_zh"))
         elif "加载" in status or status == "loading" or status == "asr_loading":
+            # [FIX] 如果当前已经有识别出的文本（非占位符），不要切换回 Loading 动画
+            # 这防止了某些情况下 status 更新滞后导致的输入框消失
+            is_real_text = current not in self._idle_texts and not self.m_cfg.is_placeholder_text(current)
+            if is_real_text:
+                return
+
             # 开启老虎机动画
             self.display.setVisible(False)
             self.slot_label.setVisible(True)
             self.slot_label.start_animation()
             self._update_display_style()
             
-            # 关键修复：如果引擎其实已经加载好了（比如从其他模式切回来），
-            # 就播个 1.0 秒的动画效果然后自动开始归位，避免无限滚动。
             if ASRManager().worker.engine.is_loaded:
                 QTimer.singleShot(1000, self.slot_label.settle_one_by_one)
 
@@ -387,16 +410,28 @@ class ASRModeWindow(QWidget):
         self.display.setFocus()
 
     def update_recording_status(self, is_recording):
-        self.voice_btn.set_recording(is_recording)
         self.waveform.setVisible(is_recording)
-        self.display.setVisible(not is_recording)
-        current = self.display.toPlainText()
+        
         if is_recording:
+            self.display.setVisible(False)
+            self.slot_label.setVisible(False) # 确保占位符也被隐藏
             self.auto_clear_timer.stop()
-            self.update_segment(self.m_cfg.get_prompt("listening"))
+            # 不需要设置 display 的文本，因为已经隐藏了
         else:
-            if current == self.m_cfg.get_prompt("listening"): self.update_segment("")
-            elif current not in [self.m_cfg.get_prompt("idle_zh"), ""]: self.auto_clear_timer.start()
+            # 录音结束，恢复显示
+            # 逻辑：如果有识别文本，显示 display；如果没有，update_segment 会处理回退到占位符
+            self.display.setVisible(True)
+            current = self.display.toPlainText()
+            if current == self.m_cfg.get_prompt("listening"): 
+                self.update_segment("")
+            elif current not in [self.m_cfg.get_prompt("idle_zh"), ""]: 
+                self.auto_clear_timer.start()
+            
+            # 如果当前是空的，update_segment 会自动调用 update_status 把 slot_label 显示出来
+            # 所以这里主要负责把 display 设为可见 (如果它包含真实文本)
+            if not current or current in self._idle_texts:
+                self.display.setVisible(False)
+                self.slot_label.setVisible(True)
 
     def update_audio_level(self, level):
         if self.waveform.isVisible(): self.waveform.set_level(level)
@@ -420,9 +455,8 @@ class ASRModeWindow(QWidget):
         from PyQt6.QtCore import QEvent
         if event.type() == QEvent.Type.MouseButtonPress:
             if event.button() == Qt.MouseButton.LeftButton:
-                if obj not in [self.clear_btn, self.voice_btn]:
-                    self._start_drag(event.globalPosition().toPoint())
-                    if obj == self.display: return True
+                self._start_drag(event.globalPosition().toPoint())
+                if obj == self.display: return True
         elif event.type() == QEvent.Type.MouseMove:
             if self._dragging:
                 self.move(event.globalPosition().toPoint() - self._drag_pos)
@@ -440,7 +474,15 @@ class ASRModeWindow(QWidget):
         
         # 处理窗口定位
         wx, wy = self.m_cfg.window_pos
-        if wx == -1 or wy == -1:
+        screen = QApplication.primaryScreen().geometry()
+        
+        # 坐标有效性检查：必须在屏幕内（至少部分可见）
+        is_valid = (wx != -1 and wy != -1)
+        if is_valid:
+            if wx < -100 or wx > screen.width() or wy < -100 or wy > screen.height():
+                is_valid = False
+                
+        if not is_valid:
             screen = QApplication.primaryScreen().geometry()
             size = self.frameGeometry().size()
             x = (screen.width() - size.width()) // 2
@@ -453,7 +495,8 @@ class ASRModeWindow(QWidget):
         self.raise_()
         
         # 只要是占位符就执行动画
-        if self.m_cfg.is_placeholder_text(self.display.toPlainText()):
+        # 只要是占位符就执行动画
+        if self.m_cfg.is_placeholder_text(self.display.toPlainText()) or self.display.toPlainText() in self._idle_texts:
             self.update_status("asr_loading")
 
     def contextMenuEvent(self, event):
@@ -463,12 +506,11 @@ class ASRModeWindow(QWidget):
         self.activateWindow()
         self.raise_()
         menu = QMenu() 
-        mode_menu = menu.addMenu("应用模式")
-        modes = [("asr", "中文直出模式"), ("asr_jp", "日文直出模式"), ("translation", "中日双显模式")]
+        modes = [("asr", "中文直出模式"), ("translation", "中日双显模式")]
         current_mode = self.m_cfg.app_mode
         for m_id, m_name in modes:
             display_name = f"{m_name}{'        ✔' if m_id == current_mode else ''}"
-            action = mode_menu.addAction(display_name)
+            action = menu.addAction(display_name)
             action.triggered.connect(lambda checked, mid=m_id: self.requestAppModeChange.emit(mid))
         menu.addSeparator()
         menu.addAction("详细设置").triggered.connect(self.requestOpenSettings.emit)
@@ -484,7 +526,12 @@ class ASRModeWindow(QWidget):
     def _on_animation_finished(self):
         self.slot_label.setVisible(False)
         self.display.setVisible(True)
-        self.update_segment(self.m_cfg.get_prompt("idle_zh"))
+        # 确保显示的文本是刚刚动画结束的那个文案
+        if 0 <= self._idle_text_index < len(self._idle_texts):
+            current_idle_text = self._idle_texts[self._idle_text_index]
+            self.update_segment(current_idle_text)
+        else:
+            self.update_segment(self.m_cfg.get_prompt("idle_zh"))
 
     def _show_hotkey_dialog(self):
         asr = self.m_cfg.hotkey_asr
@@ -494,3 +541,24 @@ class ASRModeWindow(QWidget):
             new_asr, new_toggle = dlg.get_values()
             if new_asr or new_toggle:
                 self.requestHotkeyChange.emit(new_asr, new_toggle)
+
+    def _trigger_idle_anim(self):
+        """触发一次加载动画，用于循环效果"""
+        # 只有当前还在显示 display 且内容是占位符时才触发
+        current_text = self.display.toPlainText()
+        if self.display.isVisible() and current_text in self._idle_texts:
+            # 切换到下一句文案
+            self._idle_text_index = (self._idle_text_index + 1) % len(self._idle_texts)
+            next_text = self._idle_texts[self._idle_text_index]
+            
+            # 设置新文案并触发动画
+            self.slot_label.set_target_text(next_text)
+            self.update_status("asr_loading")
+            
+    def _on_animation_finished(self):
+        # 动画结束后，显示 display，并确保 display 的内容也是最新的那句文案
+        # 这样下面的 update_segment 逻辑（检测是否为占位符）就能正确启动定时器
+        current_idle_text = self._idle_texts[self._idle_text_index]
+        self.display.setVisible(True)
+        self.slot_label.setVisible(False)
+        self.update_segment(current_idle_text)

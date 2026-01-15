@@ -502,8 +502,9 @@ class TranslatorSelectorWidget(QWidget):
         self.btn_google.setCheckable(True)
         self.btn_google.clicked.connect(lambda: self._on_engine_clicked("online"))
         
-        self.btn_nllb = QPushButton("本地 AI 翻译引擎")
+        self.btn_nllb = QPushButton("本地 AI 翻译引擎 (已暂停)")
         self.btn_nllb.setCheckable(True)
+        self.btn_nllb.setEnabled(False) # [MODIFIED] Disable button
         self.btn_nllb.clicked.connect(lambda: self._on_engine_clicked(TranslatorEngineType.NLLB_600M_CT2.value))
         
         for btn in [self.btn_google, self.btn_nllb]:
@@ -618,10 +619,15 @@ class TranslatorSelectorWidget(QWidget):
         self.btn_nllb.setStyleSheet(style)
 
     def _on_engine_clicked(self, engine_id: str):
+        # [MODIFIED] Guard against disabled NLLB
         if engine_id == TranslatorEngineType.NLLB_600M_CT2.value:
-            if not self.downloader.is_model_installed("nllb_600m"):
-                self._start_download("nllb_600m")
-                return
+            return
+
+        # Old logic commented out
+        # if engine_id == TranslatorEngineType.NLLB_600M_CT2.value:
+        #     if not self.downloader.is_model_installed("nllb_600m"):
+        #         self._start_download("nllb_600m")
+        #         return
         
         self.monitor.set_status(engine_id, "正在切换模式，请稍等...", False)
         self.pending_engine_id = engine_id

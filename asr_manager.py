@@ -25,36 +25,149 @@ from model_config import (
 # 设置环境变量，解决可能的OpenMP库冲突
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-def clean_asr_output(text: str, mode: str = "raw") -> str:
+def clean_asr_output(text: str, mode: str = "raw", is_insertion: bool = False) -> str:
     """
     清理ASR输出文本
     mode: "raw" 仅基础清理标签; "cleaned" 额外执行正则净化
+    is_insertion: 如果为 True，则剥离末尾句号；如果为 False，则保留。
     """
     if not text:
         return text
         
-    # 1. 基础清理：移除所有模型内置标签 <|xxx|> 和 [xxx] (无论哪种模式都必须移除，否则无法阅读)
+    # 1. 基础清理：移除所有模型内置标签 <|xxx|> 和 [xxx]
     text = re.sub(r'<\|.*?\|>', '', text)
     text = re.sub(r'\[.*?\]', '', text)
     
-    # 2. 如果是"正则表达 (Cleaned)"模式，执行额外的净化逻辑
+    # 2. 基础标点优化 (无论什么模式都执行)
+    # A. 智能标点处理 (Smart Punctuation)
+    base_markers = r'然后|但是|可是|那个|嗯|呃|希望他|觉得他|的话|的时候|而且|就是|其实|所以|只是|不过|因为|所以|或者|并且|所以说|或者是|比如说'
+    
+    # 获取学习到的规则
+    try:
+        cfg = get_model_config()
+        learned = cfg.get_learned_markers_regex()
+        if learned:
+            incomplete_markers = f'({base_markers}|{learned})[。！？]$'
+        else:
+            incomplete_markers = f'({base_markers})[。！？]$'
+    except:
+        incomplete_markers = f'({base_markers})[。！？]$'
+
+    # 逻辑 1: 处理多句逻辑 - “留逗去句”
+    # 如果检测到内部句号，将其替换为逗号 (用户反馈：两句话之间的逗号还是需要)
+    if text:
+        # A. 查找所有句号，如果后面还有文字，则将其替换为逗号
+        text = re.sub(r'。(?!$)', '，', text)
+        
+        # B. 处理末尾句号
+        # B. 处理末尾句号
+        if is_insertion:
+            # 插入模式：彻底剥离末尾句号 (包括全角和半角)
+            text = text.rstrip('。！？.?!')
+        else:
+            # 非插入模式 (新起一段 或 追加)：
+            # 如果识别结果本来没有句号，强制补全
+            # 必须检查全角和半角标点，防止 "test." 变成 "test.。"
+            if text and not (text.endswith(('。', '！', '？', '.', '!', '?'))):
+                # 只有当它不像是一个未完成的句子时才加
+                if not re.search(incomplete_markers, text):
+                    text += "。"
+
+    # 逻辑 2: 处理显式的“未完成”标识词 (无论是否插入都去掉标点)
+    if re.search(incomplete_markers, text):
+        text = text.rstrip('。！？')
+        
+    # 逻辑 3: 短文本片段深度保护 (如果是插入模式且短语，更倾向于去掉所有结尾标点)
+    if is_insertion:
+        core_text = text.rstrip('。！？')
+        if core_text and len(core_text) <= 5:
+            sentence_particles = r'.*[了吗吧呢啊呀哇嘛哒喔喽哩]$|.*[。，！？]$|.*[0-9a-zA-Z]$'
+            if not re.match(sentence_particles, core_text):
+                text = core_text
+
+    # 强制移除连续重复标点 (例如 "。。" -> "。" 或 ".。" -> "。")
+    text = re.sub(r'([。，！？.?!])\1+', r'\1', text)
+
+    # 2. 如果是"正则表达 (Cleaned)"模式，执行更激进的净化
     if mode == ASROutputMode.CLEANED.value:
-        # A. 移除常见的口癖/无意义填充词 (可选，根据用户反馈调整)
-        # fillers = r'(呃|啊|吧|呢|那个|然后)'
-        # text = re.sub(fillers, '', text)
-        
-        # B. 修复重复标点 (例如 "。。" -> "。")
-        text = re.sub(r'([。，！？])\1+', r'\1', text)
-        
-        # C. 强制中日英文混排空格优化 (Sherpa自带一些，这里做增强)
-        # 在汉字与英文字母/数字之间增加空格
-        text = re.sub(r'([\u4e00-\u9fa5])([a-zA-Z0-9])', r'\1 \2', text)
-        text = re.sub(r'([a-zA-Z0-9])([\u4e00-\u9fa5])', r'\1 \2', text)
+        # C. (已移除) 强制中日英文混排空格优化 - 响应用户反馈移除
+        # text = re.sub(r'([\u4e00-\u9fa5])([a-zA-Z0-9])', r'\1 \2', text)
+        # text = re.sub(r'([a-zA-Z0-9])([\u4e00-\u9fa5])', r'\1 \2', text)
         
         # D. 移除句首句尾的空白字符
         text = text.strip()
     
-    # 3. 移除多余的多重空格
+    # E. Emoji 模式
+    try:
+        from model_config import EmojiMode, get_model_config
+        # 重新获取配置以确保最新
+        cfg = get_model_config()
+        mode = cfg.emoji_mode
+        
+        if mode == EmojiMode.TRIGGER.value:
+            # 语音触发模式：检测句末关键词并替换
+            triggers = {
+                "笑哭": "😂", "哈哈": "😄", "开心": "😊", 
+                "点赞": "👍", "星星": "🌟", "爱心": "❤️", 
+                "疑问": "❓", "生气": "😠", "流泪": "😭",
+                "鼓掌": "👏", "庆祝": "🎉", "合十": "🙏",
+                "加油": "💪", "滑稽": "🤪", "思考": "🤔"
+            }
+            # 检查句末 (忽略最后的标点)
+            # 先剥离标点
+            content = text
+            suffix = ""
+            if content and content[-1] in "。，！？":
+                suffix = content[-1]
+                content = content[:-1]
+                
+            for k, v in triggers.items():
+                if content.endswith(k):
+                    # 移除关键词
+                    prefix = content[:-len(k)]
+                    # 移除关键词前面的标点 (如 "有道理，" -> "有道理")
+                    if prefix.endswith(("，", "。")):
+                        prefix = prefix[:-1]
+                    
+                    content = prefix + v
+                    # 触发模式下，Emoji 视作句末，不再追加原有的句尾标点
+                    text = content 
+                    break
+
+        elif mode == EmojiMode.AUTO.value:
+            # 自动模式：根据语气词添加，默认笑哭
+            # 情感关键词映射（简化的关键词列表）
+            sentiment_map = {
+                "😄": ["哈哈", "嘿嘿", "开心", "高兴", "快乐", "好笑"],
+                "😊": ["你好", "谢谢", "收到", "好的", "没问题", "喜欢"],
+                "👍": ["不错", "厉害", "牛", "赞", "支持", "顺利"],
+                "😭": ["难过", "伤心", "呜呜", "惨", "痛苦"],
+                "😠": ["讨厌", "烦", "滚", "气死"],
+                "🙏": ["拜托", "麻烦", "感谢", "辛苦"],
+                "🤔": ["觉得", "想", "可能", "是否", "为什么"],
+                "😂": [] # Default fallback
+            }
+            
+            found_emoji = None
+            for emoji, keywords in sentiment_map.items():
+                for kw in keywords:
+                    if kw in text:
+                        found_emoji = emoji
+                        break
+                if found_emoji: break
+            
+            if not found_emoji:
+                found_emoji = "😂"
+            
+            # 如果原文以句号或逗号结尾，先移除，再加 Emoji
+            if text.endswith(("。", "，")):
+                text = text[:-1]
+            text += found_emoji
+            
+    except Exception as e:
+        print(f"[ASRManager] Emoji error: {e}")
+
+    # 4. 移除多余的多重空格
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
@@ -95,7 +208,8 @@ def onnx_inference_worker(model_path, input_queue, output_queue, log_file=None):
         recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
             model=model_file,
             tokens=tokens_file,
-            use_itn=True,  # 使用内置的标点和文本标准化
+            use_itn=True,  # 启用内置ITN以恢复标点
+            language="auto", # 显式指定自动检测
             num_threads=4
         )
             
@@ -259,14 +373,14 @@ class ASRWorker(QObject):
         else:
             self.error_occurred.emit("语音引擎加载失败")
     
-    @pyqtSlot(object)
-    def transcribe(self, audio_data):
+    @pyqtSlot(object, bool)
+    def transcribe(self, audio_data, is_insertion=False):
         if not self.engine.is_loaded: return
         try:
             raw_text = self.engine.transcribe(audio_data)
             if raw_text:
                 mode = self.config.asr_output_mode
-                cleaned_text = clean_asr_output(raw_text, mode=mode)
+                cleaned_text = clean_asr_output(raw_text, mode=mode, is_insertion=is_insertion)
                 self.result_ready.emit(cleaned_text)
         except:
             pass
@@ -281,7 +395,7 @@ class ASRManager(QObject):
     status_changed = pyqtSignal(str)
     
     _sig_load_model = pyqtSignal()
-    _sig_transcribe = pyqtSignal(object)
+    _sig_transcribe = pyqtSignal(object, bool)
     
     def __new__(cls, *args, **kwargs):
         if not cls._instance:
@@ -306,9 +420,9 @@ class ASRManager(QObject):
 
     def start(self): self._sig_load_model.emit()
     
-    def transcribe_async(self, audio_data):
+    def transcribe_async(self, audio_data, is_insertion=False):
         data = audio_data.tolist() if isinstance(audio_data, np.ndarray) else audio_data
-        self._sig_transcribe.emit(data)
+        self._sig_transcribe.emit(data, is_insertion)
     
     def cleanup(self):
         if self.thread.isRunning():

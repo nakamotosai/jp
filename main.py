@@ -98,7 +98,9 @@ class AppController(QObject):
         self.hotkey_mgr.signals.asr_pressed.connect(self.on_asr_down)
         self.hotkey_mgr.signals.asr_released.connect(self.on_asr_up)
         self.hotkey_mgr.signals.toggle_ui.connect(self.toggle_main_ui)
-        
+        self.hotkey_mgr.signals.backspace_pressed.connect(self.check_correction)
+        self.hotkey_mgr.signals.period_pressed.connect(self.check_force_period_learning)
+
         # 5. Async Worker
         self.tr_thread = QThread()
         self.tr_worker = TranslationWorker(self.tr_engine)
@@ -125,7 +127,7 @@ class AppController(QObject):
             
         self.audio_recorder.started.connect(self.on_recording_state_changed)
         self.audio_recorder.stopped.connect(self.on_recording_state_changed)
-        self.audio_recorder.audio_ready.connect(self.asr_manager.transcribe_async)
+        self.audio_recorder.audio_ready.connect(self._handle_audio_ready)
         self.audio_recorder.level_updated.connect(self.handle_audio_level)
         
         self.asr_manager.model_ready.connect(lambda: self.on_worker_status_changed("idle"))
@@ -237,12 +239,25 @@ class AppController(QObject):
             if hasattr(self.window, "focus_input"):
                 self.window.focus_input()
 
+    def _handle_audio_ready(self, audio_data):
+        # 检查是否最近发生过点击或光标移动（插入行为）
+        is_ins = self.sys_handler.is_likely_insertion(threshold=5.0)
+        self.asr_manager.transcribe_async(audio_data, is_insertion=is_ins)
+
     def handle_asr_result(self, result):
+        print(f"[Main] Received ASR result: '{result}'")
         if not result: return
         self.window.update_segment(result)
         if self.app_mode == "asr":
              self.handle_send_request(result)
         elif self.app_mode == "asr_jp":
+             self.handle_translation_request(result)
+        elif self.app_mode == "translation":
+             # 标记当前翻译是由 ASR 触发的，翻译完成后需要自动粘贴
+             self._is_asr_triggered_translation = True
+             # 注意：translation 模式下 UI 已经通过信号监听了文本变化并触发翻译
+             # 所以这里不需要手动调用 handle_translation_request，除非 debounce 太长
+             # 但为了稳妥，我们可以直接触发翻译以提高即时性
              self.handle_translation_request(result)
 
     def on_translation_started(self):
@@ -265,6 +280,11 @@ class AppController(QObject):
             self.tr_window.on_translation_ready(text)
             # 中日双显模式：自动复制日文到剪贴板
             self.sys_handler.copy_to_clipboard(text)
+            
+            # 如果是 ASR 触发的翻译，自动粘贴到目标窗口
+            if getattr(self, '_is_asr_triggered_translation', False):
+                self._is_asr_triggered_translation = False
+                self.sys_handler.paste_text(text, should_send=False)
         elif self.app_mode == "asr_jp":
             self.asr_jp_window.update_segment(text)
             self.handle_send_request(text)
@@ -296,6 +316,7 @@ class AppController(QObject):
             threading.Thread(target=tts_worker.say, args=(text,), daemon=True).start()
 
     def handle_send_request(self, text):
+        print(f"[Main] Handling send request for '{text}', Mode={self.app_mode}")
         if not text: return
         
         if self.app_mode == "translation":
@@ -332,6 +353,78 @@ class AppController(QObject):
         else:
             # ASR 模式：只粘贴，不发送 Enter
             self.sys_handler.paste_text(text, should_send=False)
+            
+        # 记录最后粘贴的内容和时间，用于自我学习
+        import time
+        self.last_pasted_text = text
+        self.last_paste_time = time.time()
+
+    def check_correction(self):
+        """检查用户是否执行了纠错操作（删除了句号）"""
+        try:
+            import time
+            if not hasattr(self, 'last_pasted_text') or not self.last_pasted_text:
+                return
+                
+            # 只有在粘贴后 5 秒内的回删才被视为纠错
+            if time.time() - getattr(self, 'last_paste_time', 0) > 5.0:
+                return
+
+            text = self.last_pasted_text.strip()
+            # 检查是否以句号/问号/叹号结尾
+            if text and text[-1] in "。！？":
+                # 获取标点前面的词
+                # 简单策略：获取最后2-4个字，或者根据分词？
+                # 这里简单提取标点前的最后1-4个中文字符
+                content = text[:-1]
+                if not content: return
+                
+                # 提取最后几个字作为"触发词"
+                # 例如 "我觉得他。" -> "我觉得他"
+                # 为了防止提取太长，只取最后 4 个字内的部分
+                # 比如 "这真的很illegal，所以。" -> "所以"
+                
+                # 使用正则查找最后的“词块”
+                # 优先匹配汉字或英文单词
+                match = re.search(r'([\u4e00-\u9fa5a-zA-Z]+)$', content)
+                if match:
+                    last_word = match.group(1)
+                    # 限制长度，太长的句子不记录
+                    if len(last_word) <= 5:
+                        print(f"[Learning] Detected user deletion of period after '{last_word}'")
+                        self.m_cfg.learn_no_period_rule(last_word)
+                        self.last_pasted_text = None # 清除，防止重复触发
+        except Exception as e:
+            print(f"[Learning] Check correction failed: {e}")
+
+    def check_force_period_learning(self):
+        """检查用户是否执行了补充句号操作"""
+        try:
+            import time
+            if not hasattr(self, 'last_pasted_text') or not self.last_pasted_text:
+                return
+                
+            # 只有在粘贴后 5 秒内的输入才被视为纠错
+            if time.time() - getattr(self, 'last_paste_time', 0) > 5.0:
+                return
+
+            text = self.last_pasted_text.strip()
+            # 检查是否*没有*结尾标点
+            if text and text[-1] not in "。！？":
+                # 获取最后的分词
+                # 简单策略：提取标点前的最后1-4个中文字符
+                content = text
+                if not content: return
+                
+                match = re.search(r'([\u4e00-\u9fa5a-zA-Z]+)$', content)
+                if match:
+                    last_word = match.group(1)
+                    if len(last_word) <= 5:
+                        print(f"[Learning] Detected manual period addition after '{last_word}'")
+                        self.m_cfg.learn_force_period_rule(last_word)
+                        self.last_pasted_text = None 
+        except Exception as e:
+            print(f"[Learning] Check force period failed: {e}")
     
     def _refocus_translation_window(self):
         """重新聚焦中日双显窗口"""

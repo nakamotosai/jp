@@ -49,18 +49,18 @@ MODELS = {
             "https://huggingface.co/nakamotosai/ai-jp-input-asr/resolve/main/sensevoice_v1.zip",
         ]
     ),
-    "nllb_600m": ModelInfo(
-        id="nllb_600m",
-        name="NLLB 翻译模型 (600M)",
-        description="Meta开源的多语言翻译模型，支持离线中日翻译",
-        size_mb=578,
-        required=False,
-        target_dir="nllb_600m_v1",
-        mirrors=[
-            "https://hf-mirror.com/nakamotosai/ai-jp-input-nllb/resolve/main/nllb_600m_v1.zip",
-            "https://huggingface.co/nakamotosai/ai-jp-input-nllb/resolve/main/nllb_600m_v1.zip",
-        ]
-    ),
+    # "nllb_600m": ModelInfo(
+    #     id="nllb_600m",
+    #     name="NLLB 翻译模型 (600M)",
+    #     description="Meta开源的多语言翻译模型，支持离线中日翻译",
+    #     size_mb=578,
+    #     required=False,
+    #     target_dir="nllb_600m_v1",
+    #     mirrors=[
+    #         "https://hf-mirror.com/nakamotosai/ai-jp-input-nllb/resolve/main/nllb_600m_v1.zip",
+    #         "https://huggingface.co/nakamotosai/ai-jp-input-nllb/resolve/main/nllb_600m_v1.zip",
+    #     ]
+    # ),
     "punc_ct_transformer": ModelInfo(
         id="punc_ct_transformer",
         name="专业标点恢复模型",

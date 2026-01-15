@@ -74,8 +74,9 @@ class ScaledTextEdit(QTextEdit):
         doc_height = self.document().size().height()
         widget_height = self.height()
         if widget_height > doc_height:
-            margin = (widget_height - doc_height) / 2
-            self.setViewportMargins(0, int(margin), 0, 0)
+            # Move text slightly up (visual center) by reducing top margin
+            margin = (widget_height - doc_height) / 2 - 2
+            self.setViewportMargins(0, max(0, int(margin)), 0, 0)
         else:
             self.setViewportMargins(0, 0, 0, 0)
 
@@ -92,7 +93,7 @@ class ScaledTextEdit(QTextEdit):
 
     def update_style(self, color):
         self.color = color
-        self.document().setDocumentMargin(4) 
+        self.document().setDocumentMargin(0) 
         placeholder_color = "rgba(0, 0, 0, 0.4)" if color != "white" else "rgba(255, 255, 255, 0.4)"
         self.setStyleSheet(f"""
             QTextEdit {{
@@ -101,7 +102,7 @@ class ScaledTextEdit(QTextEdit):
                 font-weight: bold;
                 font-size: {int(self.base_font_size * self.current_scale * self.font_factor)}px;
                 font-family: "{self.current_family}";
-                padding: 0px;
+                padding: 0px 2px 0px 2px; /* Align with SlotMachineLabel */
                 margin: 0px;
                 border: none;
             }}
@@ -164,7 +165,9 @@ class SlotMachineLabel(QLabel):
         self._timer.setInterval(40) # 约 25fps 的急速变换
         self._timer.timeout.connect(self._update_animation)
         
-        self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._timer.timeout.connect(self._update_animation)
+        
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.apply_scale(1.0)
 
     def set_character_set(self, charset_name):
@@ -186,6 +189,9 @@ class SlotMachineLabel(QLabel):
                 font-size: {size}px;
                 font-family: "{self._family}";
                 border: none;
+                margin: 0px;
+                padding: 0px 0px 4px 0px; /* Top Right Bottom Left */
+                qproperty-indent: 0;
             }}
         """)
         self.update()
@@ -194,12 +200,22 @@ class SlotMachineLabel(QLabel):
         self._color = color
         self.apply_scale(self._scale)
 
+    def set_target_text(self, text):
+        """设置目标文本，用于动态更改"""
+        self._target_text = text
+        self._display_text = [""] * len(text)
+        self._settled_count = 0
+
     def start_animation(self):
         """开始急速变换"""
         if self._is_animating: return
         self._is_animating = True
         self._settled_count = 0
-        self._display_text = [random.choice(self._random_chars) for _ in range(len(self._target_text))]
+        
+        # 强制起始长度至少为 12 (撑满效果)
+        anim_len = max(len(self._target_text), 12)
+        self._initial_step_count = anim_len
+        self._display_text = [random.choice(self._random_chars) for _ in range(anim_len)]
         self._timer.start()
 
     def settle_one_by_one(self, start_delay=0):
@@ -213,14 +229,27 @@ class SlotMachineLabel(QLabel):
             self._settle_step()
 
     def _settle_step(self):
+        # 动态计算归位间隔，使总时长约为 2000ms
+        total_duration = 2000
+        # 使用初始长度来计算步长，保证节奏一直
+        step_delay = int(total_duration / max(1, getattr(self, '_initial_step_count', len(self._target_text))))
+        # 限制单字间隔范围
+        step_delay = max(50, min(step_delay, 400))
+        
         if self._settled_count < len(self._target_text):
-            # 将当前位置的字符固定为目标值
+            # 阶段 A: 定格有效字符
             self._display_text[self._settled_count] = self._target_text[self._settled_count]
             self._settled_count += 1
-            # 延迟归位下一个字 (约 80ms)
-            QTimer.singleShot(80, self._settle_step)
+            QTimer.singleShot(step_delay, self._settle_step)
+            
+        elif len(self._display_text) > len(self._target_text):
+            # 阶段 B: 消除多余字符 (从紧挨着正文的位置开始消除，造成收缩效果)
+            # 例如: "ABCxxxx" -> "ABCxxx" -> "ABCxx"
+            self._display_text.pop(len(self._target_text))
+            QTimer.singleShot(step_delay, self._settle_step)
+            
         else:
-            # 全部归位
+            # 全部完成
             self._is_animating = False
             self._timer.stop()
             self.setText(self._target_text)
@@ -228,7 +257,8 @@ class SlotMachineLabel(QLabel):
 
     def _update_animation(self):
         # 对未归位的字符进行随机变换
-        for i in range(self._settled_count, len(self._target_text)):
+        # 注意：_display_text 长度可能会变化，必须动态获取
+        for i in range(self._settled_count, len(self._display_text)):
             self._display_text[i] = random.choice(self._random_chars)
         
         self.setText("".join(self._display_text))
@@ -312,7 +342,7 @@ class ClearButton(QPushButton):
 class VoicePulseButton(QPushButton):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(50, 50) 
+        self.setFixedSize(40, 40)  # Reduced from 50 to fit smaller card
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus) # 避免点击按钮时导致文本框失去焦点
         self._is_recording = False
@@ -333,7 +363,7 @@ class VoicePulseButton(QPushButton):
 
     def apply_scale(self, scale):
         self.scale = scale
-        size = int(50 * scale)
+        size = int(40 * scale)
         self.setFixedSize(size, size)
         self._pulse_max = 20 * scale
         self.pulse_anim.stop()
@@ -900,7 +930,8 @@ class TranslatorWindow(QWidget):
 
     def _handle_resizing(self):
         s = self.window_scale
-        visible_w = 260 * s
+        # Updated width to ~250px total (visible area 210 + 40 margins)
+        visible_w = 210 * s
         self.setFixedWidth(int(visible_w + 40))
         text = self.zh_input.toPlainText()
         fm = QFontMetrics(self.zh_input.font())
@@ -926,11 +957,17 @@ class TranslatorWindow(QWidget):
         self.top_section.setFixedHeight(int(sect_h * s))
         self.bottom_section.setFixedHeight(int(sect_h * s))
         if self.is_expanded:
-            self.zh_input.setFixedHeight(int(sect_h * s))
-            self.jp_display.setFixedHeight(int(sect_h * s))
+            h = int(sect_h * s)
+            self.zh_input.setFixedHeight(h)
+            self.jp_display.setFixedHeight(h)
+            self.zh_slot.setFixedHeight(h)
+            self.jp_slot.setFixedHeight(h)
         else:
-            self.zh_input.setFixedHeight(int(45 * s))
-            self.jp_display.setFixedHeight(int(45 * s))
+            h = int(45 * s)
+            self.zh_input.setFixedHeight(h)
+            self.jp_display.setFixedHeight(h)
+            self.zh_slot.setFixedHeight(h)
+            self.jp_slot.setFixedHeight(h)
         
         self.clear_btn.setVisible(self.is_expanded or bool(text))
         self._update_clear_btn_pos()
@@ -1030,13 +1067,12 @@ class TranslatorWindow(QWidget):
         self.activateWindow()
         self.raise_()
         menu = QMenu()
-        mode_menu = menu.addMenu("应用模式")
-        modes = [("asr", "中文直出模式"), ("asr_jp", "日文直出模式"), ("translation", "中日双显模式")]
+        modes = [("asr", "中文直出模式"), ("translation", "中日双显模式")]
         from model_config import get_model_config
         current_mode = get_model_config().app_mode
         for m_id, m_name in modes:
             display_name = f"{m_name}{'        ✔' if m_id == current_mode else ''}"
-            action = mode_menu.addAction(display_name)
+            action = menu.addAction(display_name)
             action.triggered.connect(lambda checked, mid=m_id: self.requestAppModeChange.emit(mid))
         menu.addSeparator()
         menu.addAction("详细设置").triggered.connect(self.requestOpenSettings.emit)

@@ -298,6 +298,7 @@ class ASRJpModeWindow(QWidget):
     def _update_size(self):
         s = self.window_scale
         fixed_w = int(320 * s)
+        if fixed_w < 150: fixed_w = 150
         self.setFixedWidth(fixed_w + int(50 * s))
         self.base_height = int(52 * s)
         self.expanded_height = int(100 * s)
@@ -363,6 +364,10 @@ class ASRJpModeWindow(QWidget):
         self._update_display_style()
 
     def update_status(self, status):
+        # [FIX] 如果正在录音，绝对不要更新文字状态/显示占位符
+        if self.waveform.isVisible():
+            return
+
         current = self.display.toPlainText()
         if status == "idle" or "加载完成" in status or "就绪" in status:
             if self.slot_label.isVisible():
@@ -371,13 +376,17 @@ class ASRJpModeWindow(QWidget):
             elif self.m_cfg.is_placeholder_text(current):
                 self.update_segment("说中文，出日文")
         elif "加载" in status or status == "loading" or status == "asr_loading":
+            # [FIX] 如果当前已经有识别出的文本，不要切换回 Loading 动画
+            is_real_text = current not in ["说中文，出日文", self.m_cfg.get_prompt("idle_jp"), ""] and not self.m_cfg.is_placeholder_text(current)
+            if is_real_text:
+                return
+
             # 开启老虎机动画
             self.display.setVisible(False)
             self.slot_label.setVisible(True)
             self.slot_label.start_animation()
             self._update_display_style()
             
-            # 关键修复：如果引擎已经就绪，播个 1.0 秒动词后自动归位
             if ASRManager().worker.engine.is_loaded:
                 QTimer.singleShot(1000, self.slot_label.settle_one_by_one)
 
@@ -387,14 +396,23 @@ class ASRJpModeWindow(QWidget):
     def update_recording_status(self, is_recording):
         self.voice_btn.set_recording(is_recording)
         self.waveform.setVisible(is_recording)
-        self.display.setVisible(not is_recording)
-        current = self.display.toPlainText()
+        
         if is_recording:
+            # 录音开始：隐藏所有文本显示
+            self.display.setVisible(False)
+            self.slot_label.setVisible(False)
             self.auto_clear_timer.stop()
-            self.update_segment("识别中...")
         else:
+            # 录音结束：逻辑与 asr_mode.py 类似
+            self.display.setVisible(True)
+            current = self.display.toPlainText()
             if current == "识别中...": self.update_segment("")
             elif current not in [self.m_cfg.get_prompt("idle_jp"), ""]: self.auto_clear_timer.start()
+
+            # 恢复占位符逻辑
+            if not current or current in ["说中文，出日文", self.m_cfg.get_prompt("idle_jp")]:
+                self.display.setVisible(False)
+                self.slot_label.setVisible(True)
 
     def update_audio_level(self, level):
         if self.waveform.isVisible(): self.waveform.set_level(level)
@@ -436,7 +454,14 @@ class ASRJpModeWindow(QWidget):
         
         # 处理窗口定位
         wx, wy = self.m_cfg.window_pos
-        if wx == -1 or wy == -1:
+        screen = QApplication.primaryScreen().geometry()
+        
+        is_valid = (wx != -1 and wy != -1)
+        if is_valid:
+             if wx < -100 or wx > screen.width() or wy < -100 or wy > screen.height():
+                is_valid = False
+
+        if not is_valid:
             screen = QApplication.primaryScreen().geometry()
             size = self.frameGeometry().size()
             x = (screen.width() - size.width()) // 2
@@ -464,12 +489,11 @@ class ASRJpModeWindow(QWidget):
     def show_context_menu(self, global_pos):
         self.activateWindow(); self.raise_()
         menu = QMenu() 
-        mode_menu = menu.addMenu("应用模式")
-        modes = [("asr", "中文直出模式"), ("asr_jp", "日文直出模式"), ("translation", "中日双显模式")]
+        modes = [("asr", "中文直出模式"), ("translation", "中日双显模式")]
         current_mode = self.m_cfg.app_mode
         for m_id, m_name in modes:
             display_name = f"{m_name}{'        ✔' if m_id == current_mode else ''}"
-            action = mode_menu.addAction(display_name)
+            action = menu.addAction(display_name)
             action.triggered.connect(lambda checked, mid=m_id: self.requestAppModeChange.emit(mid))
         menu.addSeparator()
         menu.addAction("详细设置").triggered.connect(self.requestOpenSettings.emit)

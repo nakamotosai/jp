@@ -6,6 +6,8 @@ class HotkeySignals(QObject):
     asr_pressed = pyqtSignal()
     asr_released = pyqtSignal()
     toggle_ui = pyqtSignal()
+    backspace_pressed = pyqtSignal()
+    period_pressed = pyqtSignal()
 
 class HotkeyManager(QObject):
     def __init__(self, asr_key_str="ctrl+windows", toggle_ui_str="alt+windows"):
@@ -90,9 +92,22 @@ class HotkeyManager(QObject):
                         return False # 拦截
                 except ValueError:
                     pass
+            
+            # 3. 检测 Backspace (用于学习标点习惯)
+            # 仅监听按下事件，且不拦截 (returning True)
+            if e.event_type == 'down' and e.name == 'backspace':
+                try:
+                    self.signals.backspace_pressed.emit()
+                except: pass
+
+            # 4. 检测 Period (用于学习标点习惯 - 强制加句号)
+            # 监听英文句号 '.' 或中文句号 '。'
+            if e.event_type == 'down' and e.name in ['.', '。']:
+                try:
+                    self.signals.period_pressed.emit()
+                except: pass
 
         except Exception as err:
             print(f"[HotkeyManager] Event error: {err}")
             
         return True
-

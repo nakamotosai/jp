@@ -25,6 +25,12 @@ class ASROutputMode(Enum):
     CLEANED = "cleaned"
 
 
+class EmojiMode(Enum):
+    """Emoji 模式"""
+    OFF = "off"
+    AUTO = "auto"       # 自动根据语气添加
+    TRIGGER = "trigger" # 仅通过语音触发
+
 class TranslatorEngineType(Enum):
     """翻译引擎类型"""
     NLLB_1_2B_CT2 = "nllb_1_2b_ct2"     # 1.2B高质量版(ctranslate2)
@@ -262,8 +268,11 @@ class ModelConfig:
                 with open(self.CONFIG_PATH, 'r', encoding='utf-8') as f:
                     self.data = json.load(f)
                     self._current_asr_engine = ASREngineType.SENSEVOICE_ONNX.value
-                    self._current_translator_engine = self.data.get('translator_engine', self._current_translator_engine)
+                    # [MODIFIED] Force online engine, ignore saved NLLB setting
+                    self._current_translator_engine = TranslatorEngineType.GOOGLE.value
+                    # self._current_translator_engine = self.data.get('translator_engine', self._current_translator_engine)
                     self._asr_output_mode = self.data.get('asr_output_mode', self._asr_output_mode)
+                    self._emoji_mode = self.data.get('emoji_mode', "off") # string: off, auto, trigger
                     self._hotkey_asr = self.data.get('hotkey_asr', self._hotkey_asr)
                     self._hotkey_toggle_ui = self.data.get('hotkey_toggle_ui', self._hotkey_toggle_ui)
                     self._auto_tts = self.data.get('auto_tts', self._auto_tts)
@@ -281,41 +290,128 @@ class ModelConfig:
             try:
                 log_path = os.path.join(self.DATA_DIR, "error.log")
                 with open(log_path, "a", encoding="utf-8") as f:
-                    f.write(f"[load_config] {e}\n")
+                    f.write(f"[_load_config] {e}\n")
             except: pass
-    
+        
+        # 加载学习到的规则 (额外文件，不污染主配置)
+        self.learned_rules_path = os.path.join(self.DATA_DIR, "learned_rules.json")
+        self.learned_no_period_words = {} # 词 -> 拒绝次数
+        self.learned_force_period_words = {} # 词 -> 强制次数
+        
+        if os.path.exists(self.learned_rules_path):
+            try:
+                with open(self.learned_rules_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    # 兼容旧格式（直接是dict）和新格式（{no_period:..., force_period:...}）
+                    if "no_period" in data:
+                        self.learned_no_period_words = data["no_period"]
+                        self.learned_force_period_words = data.get("force_period", {})
+                    else:
+                        self.learned_no_period_words = data
+            except: pass
+
     def save_config(self):
+        """保存当前配置到文件"""
+        data = {
+            "app_mode": self._app_mode,
+            "window_scale": self._window_scale,
+            "theme_mode": self._theme_mode,
+            "font_name": self._font_name,
+            "asr_engine": self._current_asr_engine,
+            "asr_output_mode": self._asr_output_mode,
+            "emoji_mode": self.emoji_mode, # 新增
+            "translator_engine": self._current_translator_engine,
+            "hotkey_asr": self._hotkey_asr,
+            "hotkey_toggle_ui": self._hotkey_toggle_ui,
+            "auto_tts": self._auto_tts,
+            "tts_delay_ms": self._tts_delay_ms,
+            "wizard_completed": True,
+            "tip_shown": self._tip_shown,
+            "show_on_start": self._show_on_start
+        }
+        
+        # The instruction's save_config included 'font_size_factor' and 'personality_scheme.name'
+        # which are not defined in the provided ModelConfig. I've omitted them to maintain
+        # syntactic correctness and avoid AttributeError.
+        # The original save_config used self.data, but the new one constructs a dict.
+        # I'm following the new instruction's structure.
+
+        # 保存窗口位置 (如果存在)
+        if hasattr(self, "_window_x"): data["window_x"] = self._window_x
+        if hasattr(self, "_window_y"): data["window_y"] = self._window_y
+
         try:
-            config = {}
-            if os.path.exists(self.CONFIG_PATH):
-                with open(self.CONFIG_PATH, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-            
-            config['asr_engine'] = self._current_asr_engine
-            config['translator_engine'] = self._current_translator_engine
-            config['asr_output_mode'] = self._asr_output_mode
-            config['hotkey_asr'] = self._hotkey_asr
-            config['hotkey_toggle_ui'] = self._hotkey_toggle_ui
-            config['auto_tts'] = self._auto_tts
-            config['tts_delay_ms'] = self._tts_delay_ms
-            config['wizard_completed'] = True
-            config['theme_mode'] = self._theme_mode
-            config['window_scale'] = self._window_scale
-            config['font_name'] = self._font_name
-            config['app_mode'] = self._app_mode
-            config['tip_shown'] = self._tip_shown
-            config['show_on_start'] = self._show_on_start
-            config['window_x'] = self._window_x
-            config['window_y'] = self._window_y
-            self.data = config
-            with open(self.CONFIG_PATH, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
+            with open(self.CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             try:
                 log_path = os.path.join(self.DATA_DIR, "error.log")
                 with open(log_path, "a", encoding="utf-8") as f:
                     f.write(f"[save_config] {e}\n")
             except: pass
+            
+    def learn_no_period_rule(self, word: str):
+        """
+        学习不加句号的规则
+        当检测到用户删除了某个词后面的句号时调用
+        """
+        if not word: return
+        count = self.learned_no_period_words.get(word, 0) + 1
+        self.learned_no_period_words[word] = count
+        
+        # 立即保存
+        self.save_learned_rules()
+            
+    def learn_force_period_rule(self, word: str):
+        """
+        学习强制加句号的规则
+        当检测到用户手动补充了句号时调用
+        """
+        if not word: return
+        # 如果之前在"不加句号"的名单里，先移除
+        if word in self.learned_no_period_words:
+            del self.learned_no_period_words[word]
+            
+        count = self.learned_force_period_words.get(word, 0) + 1
+        self.learned_force_period_words[word] = count
+        
+        self.save_learned_rules()
+
+    def save_learned_rules(self):
+        try:
+            data = {
+                "no_period": self.learned_no_period_words,
+                "force_period": self.learned_force_period_words
+            }
+            with open(self.learned_rules_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            print(f"[Learning] Rules saved.")
+        except Exception as e:
+            print(f"[Learning] Save error: {e}")
+            
+    def get_learned_markers_regex(self) -> str:
+        """获取所有学习到的（达到阈值的）不加句号的词，组合成正则"""
+        threshold = 1 
+        words = [w for w, c in self.learned_no_period_words.items() if c >= threshold]
+        if not words: return ""
+        escaped_words = [re.escape(w) for w in words]
+        return "|".join(escaped_words)
+
+    def get_learned_force_period_regex(self) -> str:
+        """获取所有学习到的（达到阈值的）强制加句号的词，组合成正则"""
+        threshold = 1
+        words = [w for w, c in self.learned_force_period_words.items() if c >= threshold]
+        if not words: return ""
+        escaped_words = [re.escape(w) for w in words]
+        return "|".join(escaped_words)
+
+    @property
+    def emoji_mode(self) -> str: 
+        return getattr(self, '_emoji_mode', "off")
+    @emoji_mode.setter
+    def emoji_mode(self, value: str):
+        self._emoji_mode = value
+        self.save_config()
     
     def _scan_models(self):
         """扫描所有可用模型"""
@@ -326,28 +422,16 @@ class ModelConfig:
                 model.available = True
                 continue
                 
+            # [MODIFIED] Disable all local NLLB scanning
+            if "nllb" in key:
+                model.available = False
+                continue
+
             found = False
             found_path = None
             
-            for root in [self.MODELS_DIR, self.BUNDLED_MODELS_DIR]:
-                if not root or not os.path.exists(root): 
-                    continue
-                
-                folder_path = os.path.join(root, model.path)
-                if os.path.isdir(folder_path):
-                    model_bin = os.path.join(folder_path, "model.bin")
-                    if os.path.exists(model_bin):
-                        found = True
-                        found_path = folder_path
-                        break
-            
-            model.available = found
-            
-            try:
-                log_path = os.path.join(self.DATA_DIR, "model_debug.log")
-                with open(log_path, "a", encoding="utf-8") as f:
-                    f.write(f"Translator {key}: available={found}, path={found_path}\n")
-            except: pass
+            # Skip actual file check for disabled models
+            # for root in [self.MODELS_DIR, self.BUNDLED_MODELS_DIR]: ... (skipped)
         
         # 扫描 ASR 模型
         asr_model = self.ASR_MODELS[ASREngineType.SENSEVOICE_ONNX.value]

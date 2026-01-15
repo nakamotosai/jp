@@ -52,7 +52,7 @@ class SettingsWindow(QDialog):
         self.setMouseTracking(True)
         
         self.setMinimumSize(480, 500)
-        self.resize(540, 650)
+        self.resize(650, 650)
         
         # 主容器
         self.main_container = QFrame(self)
@@ -135,9 +135,9 @@ class SettingsWindow(QDialog):
         asr_container.setLayout(asr_status_layout)
         self.content_layout.addWidget(asr_container)
         
-        # 3. 输出模式
+        # 3. 输出模式 (分开布局)
         self.content_layout.addWidget(self._create_label("输出模式"))
-        mode_layout = QHBoxLayout()
+        output_layout = QHBoxLayout()
         self.output_group, self.output_buttons = self._create_option_group(
             [
                 (ASROutputMode.RAW.value, "原始输出"),
@@ -147,9 +147,27 @@ class SettingsWindow(QDialog):
             self._on_output_mode_changed,
             horizontal=True
         )
-        for btn in self.output_buttons.values(): mode_layout.addWidget(btn)
-        mode_layout.addStretch()
-        self.content_layout.addLayout(mode_layout)
+        for btn in self.output_buttons.values(): output_layout.addWidget(btn)
+        output_layout.addStretch()
+        self.content_layout.addLayout(output_layout)
+        
+        # Emoji 模式 (单独一行)
+        self.content_layout.addWidget(self._create_label("Emoji 模式"))
+        emoji_layout = QHBoxLayout()
+        from model_config import EmojiMode
+        self.emoji_group, self.emoji_buttons = self._create_option_group(
+            [
+                (EmojiMode.OFF.value, "关闭"),
+                (EmojiMode.AUTO.value, "自动(默认😂)"),
+                (EmojiMode.TRIGGER.value, "语音触发"),
+            ],
+            self.m_cfg.emoji_mode,
+            self._on_emoji_mode_changed,
+            horizontal=True
+        )
+        for btn in self.emoji_buttons.values(): emoji_layout.addWidget(btn)
+        emoji_layout.addStretch()
+        self.content_layout.addLayout(emoji_layout)
 
         # 4. 翻译引擎
         self._add_section("翻译引擎")
@@ -515,6 +533,10 @@ class SettingsWindow(QDialog):
         
     def _on_output_mode_changed(self, val):
         self.m_cfg.asr_output_mode = val
+        self.m_cfg.save_config()
+
+    def _on_emoji_mode_changed(self, val):
+        self.m_cfg.emoji_mode = val
         self.m_cfg.save_config()
         
     def on_engine_loaded(self, status: str):

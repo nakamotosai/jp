@@ -251,6 +251,11 @@ class TranslatorEngine(QObject):
             self.status_changed.emit("翻译模型准备就绪")
             return
         
+        # [MODIFIED] Force usage of online engine (User Request: Disable Local NLLB)
+        if engine_type != "online":
+            log_translator(f"请求切换到 {engine_type}，但本地模型已被禁用。强制回退到 online。")
+            engine_type = "online"
+            
         # 发送切换中状态
         self.status_changed.emit("正在切换模型，请稍等")
         
