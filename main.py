@@ -173,8 +173,31 @@ class AppController(QObject):
         self.tray_proxy.requestRestart.connect(self.restart_app)
         self.tray_proxy.requestQuit.connect(self.app.quit)
         
-        self.tray_menu = create_context_menu(None, self.m_cfg, self.tray_proxy)
-        self.tray.setContextMenu(self.tray_menu)
+        # [Task] Fix tray focus and sync issues
+        # Remove static context menu assignment
+        # self.tray_menu = create_context_menu(None, self.m_cfg, self.tray_proxy)
+        # self.tray.setContextMenu(self.tray_menu)
+        
+        try: self.tray.activated.disconnect()
+        except: pass
+        self.tray.activated.connect(self.on_tray_activated)
+
+    def on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.Context:
+            # Dynamically create menu to ensure sync
+            from ui_manager import create_context_menu
+            from PyQt6.QtGui import QCursor
+            import ctypes
+            
+            # Create fresh menu
+            menu = create_context_menu(None, self.m_cfg, self.tray_proxy)
+            
+            # [Fix] Force foreground to solve focus/closing issue
+            try:
+                ctypes.windll.user32.SetForegroundWindow(int(self.window.winId()))
+            except: pass
+            
+            menu.exec(QCursor.pos())
 
     def _connect_win_signals(self, win):
         win.requestSend.connect(self.handle_send_request)
@@ -327,10 +350,9 @@ class AppController(QObject):
         # 只有停止输入一段时间后才朗读最终结果
         if tts_worker and self.m_cfg.auto_tts:
             # 1. 打断之前正在进行的朗读
-            try:
-                tts_worker.stop()
-            except:
-                pass
+            # 1. 移除手动 stop调用，交给 worker 内部处理
+            # 避免多线程竞争导致新任务被误杀
+            pass
             
             # 2. 取消之前的延迟 timer
             if hasattr(self, '_pending_tts_timer') and self._pending_tts_timer:
@@ -345,6 +367,19 @@ class AppController(QObject):
 
     def _play_tts_delayed(self, text):
         """延迟执行的 TTS 播放 - 只播放一次"""
+        # [Safe Fix] 增加防抖逻辑
+        import time
+        now = time.time()
+        last_text = getattr(self, '_last_tts_text_played', None)
+        last_time = getattr(self, '_last_tts_time_played', 0)
+        
+        if text == last_text and (now - last_time) < 3.0:
+            print(f"[Main] 忽略重复 TTS 请求: {text}")
+            return
+            
+        self._last_tts_text_played = text
+        self._last_tts_time_played = now
+
         if tts_worker and text:
             import threading
             threading.Thread(target=tts_worker.say, args=(text,), daemon=True).start()

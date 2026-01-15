@@ -174,7 +174,8 @@ class SlotMachineLabel(QLabel):
         
         self._timer.timeout.connect(self._update_animation)
         
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # [Task] Changed to AlignLeft to fix jumpy animation as requested
+        self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.apply_scale(1.0)
 
     def set_character_set(self, charset_name):
@@ -349,19 +350,19 @@ class ClearButton(QPushButton):
 class VoicePulseButton(QPushButton):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(40, 40)  # Reduced from 50 to fit smaller card
+        self.setFixedSize(20, 20)  # Reduced from 40 to 20
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus) # 避免点击按钮时导致文本框失去焦点
         self._is_recording = False
         self._pulse_radius = 0
-        self._pulse_max = 20
+        self._pulse_max = 9
         self.scale = 1.0
         
         self.pulse_anim = QPropertyAnimation(self, b"pulse_radius")
         self.pulse_anim.setDuration(1200)
         self.pulse_anim.setLoopCount(-1)
         self.pulse_anim.setStartValue(0)
-        self.pulse_anim.setEndValue(20) 
+        self.pulse_anim.setEndValue(9) 
         self.pulse_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         
         self.bg_color = QColor(0, 0, 0, 15)
@@ -370,9 +371,9 @@ class VoicePulseButton(QPushButton):
 
     def apply_scale(self, scale):
         self.scale = scale
-        size = int(40 * scale)
+        size = int(20 * scale)
         self.setFixedSize(size, size)
-        self._pulse_max = 20 * scale
+        self._pulse_max = 9 * scale
         self.pulse_anim.stop()
         self.pulse_anim.setEndValue(self._pulse_max)
         if self._is_recording:
@@ -408,10 +409,11 @@ class VoicePulseButton(QPushButton):
             r = int(self._pulse_radius + 5 * self.scale)
             painter.drawEllipse(center, r, r)
         
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(self.pulse_color if self._is_recording else self.bg_color))
-        r_inner = int(12 * self.scale)
-        painter.drawEllipse(center, r_inner, r_inner)
+        # [Task] Removed background circle as requested
+        # painter.setPen(Qt.PenStyle.NoPen)
+        # painter.setBrush(QBrush(self.pulse_color if self._is_recording else self.bg_color))
+        # r_inner = int(12 * self.scale)
+        # painter.drawEllipse(center, r_inner, r_inner)
         
         painter.setPen(Qt.PenStyle.NoPen)
         icon_c = QColor("white") if self._is_recording else self.icon_color
@@ -432,7 +434,7 @@ class Badge(QPushButton):
     def __init__(self, text, bg_color, text_color):
         super().__init__(text)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.base_width, self.base_height, self.base_font_size = 35, 23, 11 
+        self.base_width, self.base_height, self.base_font_size = 20, 23, 11 
         self.bg_color, self.text_color = bg_color, text_color
         self.current_scale = 1.0
         self.current_family = FontManager.get_font(True)
@@ -815,7 +817,7 @@ class TranslatorWindow(QWidget):
 
         self.top_section = QWidget(); self.top_section.setObjectName("top_section")
         self.top_layout = QHBoxLayout(self.top_section)
-        self.top_layout.setSpacing(10)
+        self.top_layout.setSpacing(5)
         self.top_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.jp_badge = Badge("日>", "rgba(0,0,0,0.1)", "white")
         self.jp_display = ScaledTextEdit(self, "翻訳を待機中", "white", hide_cursor=True)
@@ -837,13 +839,14 @@ class TranslatorWindow(QWidget):
         self.top_layout.setStretch(2, 1) # Set stretch for display/slot
         self.container_layout.addWidget(self.top_section)
         self.top_fade = FadingOverlay(True, self.top_section)
+        self.top_fade.setVisible(False) # [Task] Remove gradient overlay as requested
 
         self.divider = RainbowDivider()
         self.container_layout.addWidget(self.divider)
 
         self.bottom_section = QWidget(); self.bottom_section.setObjectName("bottom_section")
         self.bottom_layout = QHBoxLayout(self.bottom_section)
-        self.bottom_layout.setSpacing(10)
+        self.bottom_layout.setSpacing(5)
         self.bottom_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.zh_badge = Badge("中>", "rgba(0,0,0,0.05)", "#333333")
         self.zh_input = ScaledTextEdit(self, "说点中文...", "#333333")
@@ -882,6 +885,7 @@ class TranslatorWindow(QWidget):
         
         self.container_layout.addWidget(self.bottom_section)
         self.bottom_fade = FadingOverlay(False, self.bottom_section)
+        self.bottom_fade.setVisible(False) # [Task] Remove gradient overlay
 
         self.container.installEventFilter(self)
         self.top_section.installEventFilter(self)
@@ -1035,13 +1039,47 @@ class TranslatorWindow(QWidget):
         self.clear_btn.apply_scale(s)
         self._handle_resizing(); self._apply_theme()
 
+    # [Task] Implement methods required by the unified context menu
+    def update_background_opacity(self, opacity):
+        self.m_cfg.window_opacity = opacity
+        self._apply_theme()
+        
+    def apply_theme(self, theme):
+        self.theme_mode = theme
+        self.m_cfg.theme_mode = theme
+        self._apply_theme()
+        
+    def apply_scaling(self, scale, font_factor, use_serif):
+        self.window_scale = scale
+        self.font_size_factor = font_factor
+        self.current_font_name = "思源宋体" if use_serif else "思源黑体"
+        self._apply_scaling()
+
     def _apply_theme(self):
+        # [Adjust] Support dynamic opacity
+        # Default opacity logic
+        opacity = getattr(self.m_cfg, 'window_opacity', 0.95)
+        
         if self.theme_mode == "Light":
-            top_bg, top_text, top_badge_bg = "rgba(185, 185, 185, 0.9)", "white", "rgba(0,0,0,0.1)"
-            bottom_bg, bottom_text, bottom_badge_bg = "rgba(245, 245, 245, 0.98)", "#333333", "rgba(0,0,0,0.05)"
+            # Adjust alpha based on opacity
+            bg_alpha = int(255 * opacity)
+            top_bg = f"rgba(185, 185, 185, {min(230, bg_alpha)})"
+            top_text, top_badge_bg = "white", "rgba(0,0,0,0.1)"
+            
+            bottom_bg_alpha = int(250 * opacity)
+            bottom_bg = f"rgba(245, 245, 245, {bottom_bg_alpha})"
+            bottom_text, bottom_badge_bg = "#333333", "rgba(0,0,0,0.05)"
         else:
-            top_bg, top_text, top_badge_bg = "rgba(245, 245, 245, 0.98)", "#333333", "rgba(0,0,0,0.05)"
-            bottom_bg, bottom_text, bottom_badge_bg = "rgba(45, 45, 45, 0.98)", "white", "rgba(255,255,255,0.1)"
+            bg_alpha = int(250 * opacity)
+            # [Fix] Restore original design: Top section is light even in Dark Mode (like chat bubble)
+            # Original: "rgba(245, 245, 245, 0.98)"
+            top_bg = f"rgba(245, 245, 245, {bg_alpha})" 
+            top_text, top_badge_bg = "#333333", "rgba(0,0,0,0.05)"
+            
+            # Use slightly simpler dark colors
+            bottom_bg = f"rgba(30, 30, 30, {bg_alpha})"
+            bottom_text, bottom_badge_bg = "white", "rgba(255,255,255,0.1)"
+            
         r = int(12 * self.window_scale)
         self.setStyleSheet(f"""
             QWidget#top_section {{ background-color: {top_bg}; border-top-left-radius: {r}px; border-top-right-radius: {r}px; border-bottom: none; }}
@@ -1050,12 +1088,26 @@ class TranslatorWindow(QWidget):
         """)
         self.jp_badge.update_style(top_badge_bg, top_text); self.jp_display.update_style(top_text)
         self.zh_badge.update_style(bottom_badge_bg, bottom_text); self.zh_input.update_style(bottom_text)
-        # 老虎机动画统一使用半透明灰色，避免太亮
+        
+        # 老虎机动画统一使用半透明灰色
         zh_slot_color = "rgba(255,255,255,0.5)" if self.theme_mode == "Dark" else "rgba(0,0,0,0.4)"
         jp_slot_color = "rgba(0,0,0,0.4)" if self.theme_mode == "Dark" else "rgba(255,255,255,0.5)"
         self.zh_slot.set_text_color(zh_slot_color); self.jp_slot.set_text_color(jp_slot_color)
-        self.top_fade.set_color(top_bg)
-        self.bottom_fade.set_color(bottom_bg)
+        
+        # Fading overlays need color update too
+        # Since 'top_bg' is complex string, we might need simple QColor for fading overlay if it expects it
+        # But FadingOverlay usually takes QWidget parent bg. 
+        # For now assume FadingOverlay handles it or we pass a color object.
+        # Let's parse the rgba string to QColor if needed, or just let it be.
+        # Using a solid color approximation for fade might be safer or extract from string.
+        # Simplification: Pass generic color
+        c_top = QColor(245, 245, 245) if self.theme_mode == "Light" else QColor(45, 45, 45)
+        c_bottom = QColor(245, 245, 245) if self.theme_mode == "Light" else QColor(30, 30, 30)
+        c_top.setAlpha(int(255 * opacity))
+        c_bottom.setAlpha(int(255 * opacity))
+        self.top_fade.set_color(c_top)
+        self.bottom_fade.set_color(c_bottom)
+
         self.waveform.bar_color = QColor(100, 100, 100) if self.theme_mode == "Light" else QColor(204, 204, 204)
         
         voice_bg = QColor(0, 0, 0, 15) if self.theme_mode == "Light" else QColor(255, 255, 255, 15)
@@ -1069,26 +1121,14 @@ class TranslatorWindow(QWidget):
         self.show_context_menu(event.globalPos())
 
     def show_context_menu(self, global_pos):
+        # [Task] 使用统一的菜单创建器
+        from ui_manager import create_context_menu
         self.activateWindow()
         self.raise_()
-        menu = QMenu()
-        modes = [("asr", "中文直出模式"), ("translation", "中日双显模式")]
-        from model_config import get_model_config
-        current_mode = get_model_config().app_mode
-        for m_id, m_name in modes:
-            display_name = f"{m_name}{'        ✔' if m_id == current_mode else ''}"
-            action = menu.addAction(display_name)
-            action.triggered.connect(lambda checked, mid=m_id: self.requestAppModeChange.emit(mid))
-        menu.addSeparator()
-        menu.addAction("详细设置").triggered.connect(self.requestOpenSettings.emit)
-        from startup_manager import StartupManager
-        is_on = StartupManager.is_enabled()
-        autostart_text = f"开机自启{'        ✔' if is_on else ''}"
-        menu.addAction(autostart_text).triggered.connect(lambda: StartupManager.set_enabled(not is_on))
-        menu.addSeparator()
-        menu.addAction("重启应用").triggered.connect(self.requestRestart.emit)
-        menu.addAction("退出程序").triggered.connect(self.requestQuit.emit)
-        self.activateWindow()
+        
+        # 传入 self 作为 signals_proxy，因为 TranslatorWindow 已经定义了所有需要的信号
+        # 且 create_context_menu 会通过 signals_proxy.requestAppModeChange 等信号与外界通信
+        menu = create_context_menu(self, self.m_cfg, self)
         menu.exec(global_pos)
 
     def _show_hotkey_dialog(self):
@@ -1172,7 +1212,7 @@ class TranslatorWindow(QWidget):
             if target_y < 100: target_y = 100 # 最小高度
             
             # X轴居中
-            win_w = self.width() if self.width() > 10 else 600
+            win_w = self.width() if self.width() > 10 else 750
             if hasattr(self, 'frameGeometry'):
                 win_w = self.frameGeometry().width()
                 
@@ -1349,8 +1389,8 @@ def create_context_menu(parent_widget=None, config=None, signals_proxy=None):
         return wa
 
     # === 模式选择 (Mode Selection) ===
-    # 强制获取最新 app_mode，config.data 是 dict
-    current_mode = config.data.get("app_mode", "asr")
+    # [Fix] 直接使用属性获取最新状态，不要用 stale 的 config.data
+    current_mode = getattr(config, 'app_mode', 'asr')
     
     act_asr = QAction("中文识别模式", menu)
     act_asr.setCheckable(True)
