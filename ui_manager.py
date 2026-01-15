@@ -115,17 +115,42 @@ class ScaledTextEdit(QTextEdit):
         self._on_content_changed()
 
     def _on_content_changed(self):
+        # [Fix] Do NOT return early if empty, otherwise height/geometry is not updated!
+        # if self.document().isEmpty():
+        #     self.sizeHintChanged.emit(100, self.base_min_height)
+        #     return
+
         metrics = QFontMetrics(self.font())
-        lines = self.toPlainText().split('\n')
-        max_line_w = 0
-        for line in lines:
-            max_line_w = max_line_w if max_line_w > metrics.horizontalAdvance(line if line else " ") else metrics.horizontalAdvance(line if line else " ")
+        text = self.toPlainText()
         
-        suggested_width = max_line_w + 10
-        self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-        self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-        doc_height = int(self.document().size().height())
-        self.setFixedHeight(doc_height) # Force height to match content for Layout centering
+        # [Optimize] Avoid splitting massive text if not needed
+        lines = text.split('\n')
+        max_line_w = 0
+        
+        # [Optimize] Use list comprehension max, faster than python loop
+        if lines:
+            max_line_w = max(metrics.horizontalAdvance(line) for line in lines)
+            
+        suggested_width = max_line_w + 12 # + margin
+        
+        # [Fix] setLineWrapMode triggers relayout, do it only once
+        if self.lineWrapMode() != QTextEdit.LineWrapMode.WidgetWidth:
+            self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+            
+        # Ensure we get the correct single line height even if empty
+        if not text:
+             doc_height = metrics.height() + int(self.document().documentMargin() * 2)
+        else:
+             doc_height = int(self.document().size().height())
+        
+        # [Optimize] Only set height if changed (and ensure non-zero)
+        target_h = max(doc_height, self.base_min_height if not text else 0)
+        
+        # Dual mode uses fixed height based on content
+        # If empty, we want it to be at least some visible height for placeholder
+        if self.height() != doc_height:
+            self.setFixedHeight(doc_height) 
+            
         self.sizeHintChanged.emit(suggested_width, doc_height)
 
     def keyPressEvent(self, event):
@@ -174,9 +199,15 @@ class SlotMachineLabel(QLabel):
         
         self._timer.timeout.connect(self._update_animation)
         
-        # [Task] Changed to AlignLeft to fix jumpy animation as requested
-        self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        # [Task] Default to Center for ASR mode compatibility
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.apply_scale(1.0)
+        
+    def set_alignment(self, align_flag, padding_left=0):
+        """Allow external configuration of alignment"""
+        self.setAlignment(align_flag)
+        self._padding_left = padding_left
+        self.apply_scale(self._scale)
 
     def set_character_set(self, charset_name):
         """设置使用的随机字符库: 'zh', 'jp', 'default'"""
@@ -189,6 +220,7 @@ class SlotMachineLabel(QLabel):
         if font_factor: self._font_factor = font_factor
         
         size = int(15 * self._scale * self._font_factor)
+        padding = getattr(self, '_padding_left', 0)
         self.setStyleSheet(f"""
             QLabel {{
                 color: {self._color};
@@ -198,7 +230,7 @@ class SlotMachineLabel(QLabel):
                 font-family: "{self._family}";
                 border: none;
                 margin: 0px;
-                padding: 0px 0px 0px 0px; /* Top Right Bottom Left */
+                padding: 0px 0px 0px {padding}px; /* Dynamic padding */
                 qproperty-indent: 0;
             }}
         """)
@@ -833,6 +865,8 @@ class TranslatorWindow(QWidget):
         self.jp_slot = SlotMachineLabel(self, "翻訳を待機中", "white")
         self.jp_slot.set_character_set("jp")
         self.jp_slot.setVisible(False)
+        # [Task] Dual Mode uses Left alignment with padding
+        self.jp_slot.set_alignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, padding_left=2)
         self.jp_slot.animationFinished.connect(lambda: self._on_prompt_anim_finished("jp"))
 
         self.top_layout.addWidget(self.jp_badge); self.top_layout.addWidget(self.jp_display); self.top_layout.addWidget(self.jp_slot, 1)
@@ -857,6 +891,8 @@ class TranslatorWindow(QWidget):
         self.zh_slot = SlotMachineLabel(self, "说点中文...", "#333333")
         self.zh_slot.set_character_set("zh")
         self.zh_slot.setVisible(False)
+        # [Task] Dual Mode uses Left alignment with padding
+        self.zh_slot.set_alignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, padding_left=2)
         self.zh_slot.animationFinished.connect(lambda: self._on_prompt_anim_finished("zh"))
 
         self.bottom_layout.addWidget(self.zh_badge); self.bottom_layout.addWidget(self.zh_input); self.bottom_layout.addWidget(self.zh_slot, 1)
@@ -943,18 +979,33 @@ class TranslatorWindow(QWidget):
         s = self.window_scale
         # Updated width to ~250px total (visible area 210 + 40 margins)
         visible_w = 210 * s
-        self.setFixedWidth(int(visible_w + 40))
+        target_w = int(visible_w + 40)
+        
+        # [Optimize] Prevent redundant layout invalidation
+        if self.width() != target_w:
+            self.setFixedWidth(target_w)
+            
         text = self.zh_input.toPlainText()
-        fm = QFontMetrics(self.zh_input.font())
-        doc_margin = int(self.zh_input.document().documentMargin())
-        single_line_height = fm.height() + (doc_margin * 2)
+        
+        # [Optimize] Avoid heavy font metrics if not needed, use doc height which is cached
+        # fm = QFontMetrics(self.zh_input.font())
+        # doc_margin = int(self.zh_input.document().documentMargin())
+        # single_line_height = fm.height() + (doc_margin * 2)
+        
+        # Approximate single line check using base font size * scale
+        approx_line_h = int(25 * s * self.font_size_factor) # loose approximation
+        doc_h = self.zh_input.document().size().height()
+        
         if not self.is_expanded:
-            if self.zh_input.document().size().height() > (single_line_height + 5) or "\n" in text:
+            # Use a slightly more robust check
+            if doc_h > (approx_line_h + 10) or "\n" in text:
                 self.is_expanded = True
         elif not text:
             self.is_expanded = False
+            
         target_visible_h = 203 if self.is_expanded else 103
         target_h = int((target_visible_h + 40) * s)
+        
         if self.minimumHeight() != target_h:
             self.anim.stop()
             self.anim.setStartValue(self.height())
@@ -963,18 +1014,22 @@ class TranslatorWindow(QWidget):
             except: pass
             self.anim.valueChanged.connect(lambda v: self.setMaximumHeight(v))
             self.anim.start()
-            self.setMaximumHeight(target_h)
+            self.setMaximumHeight(target_h) # Set immediately if anim not wanted or as end val
+            
         sect_h = 100 if self.is_expanded else 50
-        self.top_section.setFixedHeight(int(sect_h * s))
-        self.bottom_section.setFixedHeight(int(sect_h * s))
+        
+        # [Optimize] Only update if changed
+        target_sect_h = int(sect_h * s)
+        if self.top_section.height() != target_sect_h:
+            self.top_section.setFixedHeight(target_sect_h)
+            self.bottom_section.setFixedHeight(target_sect_h)
+            
         if self.is_expanded:
             h = int(sect_h * s)
-            # Remove direct height setting to allow VCenter layout to work
             self.zh_slot.setFixedHeight(h)
             self.jp_slot.setFixedHeight(h)
         else:
             h = int(45 * s)
-            # Remove direct height setting to allow VCenter layout to work
             self.zh_slot.setFixedHeight(h)
             self.jp_slot.setFixedHeight(h)
         
@@ -982,12 +1037,20 @@ class TranslatorWindow(QWidget):
         self._update_clear_btn_pos()
 
         m_x = int(12 * s)
-        self.top_layout.setContentsMargins(m_x, 0, m_x, 0)
-        self.bottom_layout.setContentsMargins(m_x, 0, m_x, 0)
-        self.top_fade.setFixedWidth(int(visible_w))
-        self.top_fade.move(0, 0)
-        self.bottom_fade.setFixedWidth(int(visible_w))
-        self.bottom_fade.move(0, 0)
+        # [Optimize] Only set margins if different
+        current_margins = self.top_layout.contentsMargins()
+        if current_margins.left() != m_x:
+            self.top_layout.setContentsMargins(m_x, 0, m_x, 0)
+            self.bottom_layout.setContentsMargins(m_x, 0, m_x, 0)
+            
+        # Overlays hidden, but keep code valid just in case
+        if self.top_fade.isVisible():
+            self.top_fade.setFixedWidth(int(visible_w))
+            self.top_fade.move(0, 0)
+        
+        if self.bottom_fade.isVisible():
+            self.bottom_fade.setFixedWidth(int(visible_w))
+            self.bottom_fade.move(0, 0)
         
         if self.waveform.isVisible():
             self.waveform.setFixedWidth(self.zh_input.width())
