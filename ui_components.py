@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QProgressBar, QFrame
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QThread, QObject, pyqtSlot
-from PyQt6.QtGui import QKeyEvent, QKeySequence, QFont
+from PyQt6.QtGui import QKeyEvent, QKeySequence, QFont, QPainter, QColor, QBrush, QPen
 
 from model_downloader import get_downloader, DownloadStatus
 from model_config import TranslatorEngineType, get_model_config
@@ -492,8 +492,9 @@ class TranslatorSelectorWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(15)
         
-        self.monitor = TranslatorMonitorWidget()
-        layout.addWidget(self.monitor)
+        # [MODIFIED] 注释掉显示面板区域
+        # self.monitor = TranslatorMonitorWidget()
+        # layout.addWidget(self.monitor)
         
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(10)
@@ -524,7 +525,8 @@ class TranslatorSelectorWidget(QWidget):
 
     def update_theme(self, is_light):
         self.is_light = is_light
-        self.monitor.update_theme(is_light)
+        # [MODIFIED] 注释掉对 monitor 的引用
+        # self.monitor.update_theme(is_light)
         self._update_button_styles()
         
         if is_light:
@@ -551,11 +553,11 @@ class TranslatorSelectorWidget(QWidget):
         # 否则（正在切换中）维持 Monitor 现状，避免被后端旧状态的 ID 覆盖
         if is_ready:
             self.pending_engine_id = None
-            self.monitor.set_status(target_id, "就绪", True)
+            # self.monitor.set_status(target_id, "就绪", True)
         elif not self.pending_engine_id:
             # 仅在非点击切换的静态状态下（如刚打开设置面板）同步基础信息
             status_desc = "正在初始化..." if target_id != "online" else "运行中"
-            self.monitor.set_status(target_id, status_desc, is_ready)
+            # self.monitor.set_status(target_id, status_desc, is_ready)
 
         # 始终同步按钮高亮，以意图为主
         is_online = (target_id == "online")
@@ -563,11 +565,13 @@ class TranslatorSelectorWidget(QWidget):
         self.btn_nllb.setChecked(not is_online)
         
         if not self.downloader.is_model_installed("nllb_600m"):
-            self.monitor.info_lbl.setText("提示: NLLB 600M 本地模型暂未下载")
+            # self.monitor.info_lbl.setText("提示: NLLB 600M 本地模型暂未下载")
+            pass
         else:
             # 如果已安装，确保清除旧的“未下载”提示
-            if "暂未下载" in self.monitor.info_lbl.text():
-                self.monitor.info_lbl.setText("")
+            # if "暂未下载" in self.monitor.info_lbl.text():
+            #     self.monitor.info_lbl.setText("")
+            pass
 
         self._update_button_styles()
 
@@ -629,7 +633,8 @@ class TranslatorSelectorWidget(QWidget):
         #         self._start_download("nllb_600m")
         #         return
         
-        self.monitor.set_status(engine_id, "正在切换模式，请稍等...", False)
+        # [MODIFIED] 注释掉对 monitor 的引用
+        # self.monitor.set_status(engine_id, "正在切换模式，请稍等...", False)
         self.pending_engine_id = engine_id
         self.m_cfg.current_translator_engine = engine_id
         self.m_cfg.save_config()
@@ -639,7 +644,7 @@ class TranslatorSelectorWidget(QWidget):
 
     def _start_download(self, dl_key: str):
         self.btn_nllb.setEnabled(False)
-        self.monitor.set_status(TranslatorEngineType.NLLB_600M_CT2.value, "准备下载...", False)
+        # self.monitor.set_status(TranslatorEngineType.NLLB_600M_CT2.value, "准备下载...", False)
         self.progress.show()
         
         # 停止旧线程如果存在
@@ -666,25 +671,26 @@ class TranslatorSelectorWidget(QWidget):
         if total > 0:
             percent = int((downloaded / total) * 100)
             self.progress.setValue(percent)
-            self.monitor.set_status(
-                TranslatorEngineType.NLLB_600M_CT2.value, 
-                f"正在下载: {percent}% ({speed})", 
-                False
-            )
+            # self.monitor.set_status(
+            #     TranslatorEngineType.NLLB_600M_CT2.value, 
+            #     f"正在下载: {percent}% ({speed})", 
+            #     False
+            # )
             
     def _on_dl_status(self, status, msg):
         if status == DownloadStatus.COMPLETED:
             self.progress.hide()
             self.btn_nllb.setEnabled(True)
-            self.monitor.info_lbl.setText("安装成功！正在切换引擎...")
+            # self.monitor.info_lbl.setText("安装成功！正在切换引擎...")
             self._on_engine_clicked(TranslatorEngineType.NLLB_600M_CT2.value)
         elif status == DownloadStatus.FAILED:
-            self.monitor.set_status(TranslatorEngineType.NLLB_600M_CT2.value, f"失败: {msg}", False)
+            # self.monitor.set_status(TranslatorEngineType.NLLB_600M_CT2.value, f"失败: {msg}", False)
             self.btn_nllb.setEnabled(True)
             self.progress.hide()
         else:
             if "%" not in msg:
-                 self.monitor.set_status(TranslatorEngineType.NLLB_600M_CT2.value, msg, False)
+                 # self.monitor.set_status(TranslatorEngineType.NLLB_600M_CT2.value, msg, False)
+                 pass
 
     def update_engine_status(self, status: str):
         """引擎加载完成或状态改变的回调"""
@@ -694,7 +700,7 @@ class TranslatorSelectorWidget(QWidget):
         if is_ready:
             self.pending_engine_id = None # 清除挂起状态
             
-        self.monitor.set_status(current_id, status, is_ready)
+        # self.monitor.set_status(current_id, status, is_ready)
         # 刷新按钮状态和高亮
         self.sync_status()
 
@@ -703,6 +709,7 @@ class TeachingTip(QFrame):
     """新手教学气泡提示"""
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) # Fix for black corners
         self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         
         layout = QVBoxLayout(self)
@@ -710,20 +717,24 @@ class TeachingTip(QFrame):
         
         # 提示内容
         self.label = QLabel(
-            "💡 <b>新手提示</b><br><br>"
-            "1. 按住 <b>Win + Ctrl</b> 说话，松开后停止<br>"
-            "2. <b>Win + Alt</b> 快速显示或隐藏窗口<br>"
-            "3. 界面上<b>右键</b>后会弹出菜单，可切换模式或在设置中选择本地模型"
+            "<b>快捷指令</b><br><br>"
+            "• <b>Win + Ctrl</b><br>"
+            "&nbsp;&nbsp;&nbsp;按住说话<br><br>"
+            "• <b>Win + Alt</b><br>"
+            "&nbsp;&nbsp;&nbsp;显隐窗口<br><br>"
+            "• <b>界面右键</b><br>"
+            "&nbsp;&nbsp;&nbsp;唤出菜单"
         )
         self.label.setWordWrap(True)
-        self.label.setFixedWidth(280)
-        self.label.setStyleSheet("color: white; font-size: 13px; line-height: 1.5;")
+        self.label.setFixedWidth(200) 
+        self.label.setStyleSheet("color: #e0e0e0; font-size: 13px; line-height: 1.4;")
+        self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents) # [Fix] Allow dragging from text area
         layout.addWidget(self.label)
         
         # 关闭按钮
-        close_btn = QPushButton("我知道了")
-        close_btn.setFixedWidth(80)
-        close_btn.setFixedHeight(28)
+        close_btn = QPushButton("OK")
+        close_btn.setFixedWidth(60)
+        close_btn.setFixedHeight(24)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.clicked.connect(self.close)
         
@@ -734,35 +745,70 @@ class TeachingTip(QFrame):
         
         self.setStyleSheet("""
             TeachingTip {
-                background-color: #1e1e1e;
-                border: 1px solid #4d4d4d;
-                border-radius: 0px;
+                background: transparent; 
+                border: none;
+            }
+            QLabel {
+                padding: 5px;
+                background: transparent;
             }
             QPushButton {
-                background-color: #0e639c;
-                color: white;
+                background-color: #333333; 
+                color: #cccccc;
                 border: none;
-                border-radius: 4px;
-                font-size: 12px;
+                border-radius: 6px;
+                font-size: 11px;
                 font-weight: bold;
+                padding: 4px 8px;
             }
             QPushButton:hover {
-                background-color: #1177bb;
+                background-color: #4d4d4d;
+                color: white;
             }
         """)
 
-    def show_beside(self, widget):
-        """在指定组件旁边显示"""
-        if not widget: return
-        pos = widget.mapToGlobal(widget.rect().topRight())
-        # 添加阴影效果
-        from PyQt6.QtWidgets import QGraphicsDropShadowEffect
-        from PyQt6.QtGui import QColor
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(20)
-        shadow.setColor(QColor(0, 0, 0, 180))
-        shadow.setOffset(0, 4)
-        self.setGraphicsEffect(shadow)
+    def paintEvent(self, event):
+        """手动绘制以支持圆角透明背景"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        self.move(pos.x() + 20, pos.y())
+        # 填充背景
+        painter.setBrush(QBrush(QColor("#1f1f1f")))
+        painter.setPen(QPen(QColor("#3d3d3d"), 1)) # 边框
+        
+        # [Fix] 使用 QRectF 避免整数坐标导致的截断问题
+        from PyQt6.QtCore import QRectF
+        rect = QRectF(self.rect())
+        rect.adjust(0.5, 0.5, -0.5, -0.5) # 半像素微调，保证边框清晰且不被切
+        painter.drawRoundedRect(rect, 12, 12)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self.drag_position)
+            event.accept()
+
+    def show_beside(self, widget):
+        """在指定组件右侧显示"""
+        if not widget: return
+        # 获取目标窗口的全局几何信息
+        target_geo = widget.frameGeometry()
+        
+        # 计算显示位置
+        # 由于我们加上了 20px 的透明边距用于显示阴影，这里需要做一些偏移补偿
+        # 目标：内容的左侧边缘 距离 目标窗口右侧 10px
+        # 窗口左上角 x = 目标右边 + 10px - 左边距(20px)
+        
+        spacing = 10
+        margin_left = 20 # 对应 ContentsMargins
+        margin_top = 20
+        
+        x = target_geo.x() + target_geo.width() + spacing - margin_left
+        y = target_geo.y() - margin_top # 顶部对齐（考虑到阴影上边距）
+        
+        self.move(x, y)
         self.show()

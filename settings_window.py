@@ -169,6 +169,16 @@ class SettingsWindow(QDialog):
         emoji_layout.addStretch()
         self.content_layout.addLayout(emoji_layout)
 
+        # Emoji 触发词说明
+        emoji_tip = QLabel(
+            "<b>💡 语音触发使用说明：</b><br>"
+            "在每句话最后说出关键词即可触发：<br>"
+            "笑哭、哈哈、开心、点赞、星星、爱心、疑问、生气、流泪、鼓掌、庆祝、合十、加油、滑稽、思考"
+        )
+        emoji_tip.setStyleSheet("color: #888888; font-size: 11px; margin-left: 5px; line-height: 1.4;")
+        emoji_tip.setWordWrap(True)
+        self.content_layout.addWidget(emoji_tip)
+
         # 4. 翻译引擎
         self._add_section("翻译引擎")
         
@@ -217,17 +227,25 @@ class SettingsWindow(QDialog):
         # ... (Removed code)
         
         # 7. 快捷键
-        self._add_section("快捷键 (点击按钮录制)")
+        self._add_section("快捷键")
         
-        self.hotkey_asr_btn = HotkeyButton(self.m_cfg.hotkey_asr)
-        self.hotkey_asr_btn.hotkeyChanged.connect(lambda k: self._on_hotkey_changed("asr", k))
-        self.content_layout.addWidget(self._create_label("语音输入 (按住)"))
-        self.content_layout.addWidget(self.hotkey_asr_btn)
+        # 语音输入
+        asr_hotkey_layout = QHBoxLayout()
+        asr_hotkey_layout.addWidget(QLabel("语音输入 (按住)"))
+        asr_hotkey_layout.addStretch()
+        asr_key_lbl = QLabel(self.m_cfg.hotkey_asr.upper().replace("+", " + "))
+        asr_key_lbl.setObjectName("HotkeyDisplay")
+        asr_hotkey_layout.addWidget(asr_key_lbl)
+        self.content_layout.addLayout(asr_hotkey_layout)
         
-        self.hotkey_toggle_btn = HotkeyButton(self.m_cfg.hotkey_toggle_ui)
-        self.hotkey_toggle_btn.hotkeyChanged.connect(lambda k: self._on_hotkey_changed("toggle", k))
-        self.content_layout.addWidget(self._create_label("显示/隐藏"))
-        self.content_layout.addWidget(self.hotkey_toggle_btn)
+        # 显示/隐藏
+        toggle_hotkey_layout = QHBoxLayout()
+        toggle_hotkey_layout.addWidget(QLabel("显示 / 隐藏窗口"))
+        toggle_hotkey_layout.addStretch()
+        toggle_key_lbl = QLabel(self.m_cfg.hotkey_toggle_ui.upper().replace("+", " + "))
+        toggle_key_lbl.setObjectName("HotkeyDisplay")
+        toggle_hotkey_layout.addWidget(toggle_key_lbl)
+        self.content_layout.addLayout(toggle_hotkey_layout)
         
         # 8. 启动与关于
         self._add_section("其他")
@@ -246,6 +264,11 @@ class SettingsWindow(QDialog):
         author_btn.setFlat(True)
         author_btn.clicked.connect(lambda: webbrowser.open(AUTHOR_URL))
         self.content_layout.addWidget(author_btn)
+
+        official_btn = QPushButton(f"中日说官方主页 {OFFICIAL_SITE_URL}")
+        official_btn.setFlat(True)
+        official_btn.clicked.connect(lambda: webbrowser.open(OFFICIAL_SITE_URL))
+        self.content_layout.addWidget(official_btn)
 
         self.content_layout.addStretch()
         self.scroll.setWidget(self.content)
@@ -367,6 +390,17 @@ class SettingsWindow(QDialog):
 
             QPushButton[flat="true"] {{ color: {accent}; text-align: left; border: none; background: transparent; font-weight: bold; }}
             QPushButton {{ font-family: '{font_family}', 'Segoe UI', system-ui, sans-serif; }}
+            
+            QLabel#HotkeyDisplay {{
+                background-color: {item_bg};
+                color: {accent};
+                border: 1px solid {border_color};
+                border-radius: 6px;
+                padding: 4px 12px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-weight: bold;
+                font-size: 12px;
+            }}
         """
         self.setStyleSheet(style)
         
@@ -374,15 +408,15 @@ class SettingsWindow(QDialog):
         for btn in self.output_buttons.values(): self._update_btn_style(btn, is_light)
         for btn in self.delay_buttons.values(): self._update_btn_style(btn, is_light)
         for btn in self.mode_buttons.values(): self._update_btn_style(btn, is_light)
-        for btn in self.theme_buttons.values(): self._update_btn_style(btn, is_light)
-        for btn in self.scale_buttons.values(): self._update_btn_style(btn, is_light)
-        for btn in self.font_buttons.values(): self._update_btn_style(btn, is_light)
+        # for btn in self.theme_buttons.values(): self._update_btn_style(btn, is_light)
+        # for btn in self.scale_buttons.values(): self._update_btn_style(btn, is_light)
+        # for btn in self.font_buttons.values(): self._update_btn_style(btn, is_light)
         
         # 更新自定义组件的主题
         # self.asr_item.update_theme(is_light) # 已移除对象
         self.tr_selector.update_theme(is_light)
-        self.hotkey_asr_btn.update_theme(is_light)
-        self.hotkey_toggle_btn.update_theme(is_light)
+        # self.hotkey_asr_btn.update_theme(is_light)
+        # self.hotkey_toggle_btn.update_theme(is_light)
         self.update_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {"#0078d4" if is_light else "#0e639c"};

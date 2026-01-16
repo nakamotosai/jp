@@ -3,7 +3,6 @@ numpy
 sounddevice
 sherpa-onnx
 onnxruntime
-ctranslate2
 sentencepiece
 edge-tts
 pynput

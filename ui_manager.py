@@ -106,7 +106,8 @@ class ScaledTextEdit(QTextEdit):
                 font-size: {int(self.base_font_size * self.current_scale * self.font_factor)}px;
                 font-family: "{self.current_family}";
                 padding: 0px 2px 0px 2px; /* Align with SlotMachineLabel */
-                margin: 0px;
+                margin-top: -1px;
+                margin-bottom: 1px;
                 border: none;
             }}
             QTextEdit:empty {{ color: {placeholder_color}; }}
@@ -229,7 +230,8 @@ class SlotMachineLabel(QLabel):
                 font-size: {size}px;
                 font-family: "{self._family}";
                 border: none;
-                margin: 0px;
+                margin-top: -1px; 
+                margin-bottom: 1px;
                 padding: 0px 0px 0px {padding}px; /* Dynamic padding */
                 qproperty-indent: 0;
             }}
@@ -489,6 +491,8 @@ class Badge(QPushButton):
                 font-family: "{self.current_family}";
                 border: none;
                 padding: 0px;
+                margin-top: -1px; /* [Skill] 同步上移 1px，保持与 ScaledTextEdit 的基准线重合 */
+                margin-bottom: 1px;
             }}
         """)
 
@@ -914,6 +918,12 @@ class TranslatorWindow(QWidget):
         self.auto_clear_zh_timer.setInterval(5000)
         self.auto_clear_zh_timer.timeout.connect(self._auto_clear_zh)
         
+        # [Task] 日文译文自动清空计时器 (15秒)
+        self.auto_clear_jp_timer = QTimer(self)
+        self.auto_clear_jp_timer.setSingleShot(True)
+        self.auto_clear_jp_timer.setInterval(15000)
+        self.auto_clear_jp_timer.timeout.connect(self._auto_clear_jp)
+        
         self.waveform = VoiceWaveform(self)
         self.waveform.setVisible(False)
         
@@ -954,6 +964,8 @@ class TranslatorWindow(QWidget):
         # Reset auto-clear timer whenever new text arrives
         if zh_text: 
             self.auto_clear_zh_timer.start()
+        if jp_text:
+            self.auto_clear_jp_timer.start()
 
     def _move_cursor_to_end(self):
         """Internal helper to move blinking cursor to end of Chinese input"""
@@ -990,19 +1002,42 @@ class TranslatorWindow(QWidget):
         # doc_margin = int(self.zh_input.document().documentMargin())
         # single_line_height = fm.height() + (doc_margin * 2)
         
-        # Approximate single line check using base font size * scale
-        approx_line_h = int(25 * s * self.font_size_factor) # loose approximation
-        doc_h = self.zh_input.document().size().height()
+        # [Skill] 内容驱动型动态高度计算
+        zh_doc_h = self.zh_input.document().size().height()
+        jp_doc_h = self.jp_display.document().size().height()
+        approx_line_h = int(25 * s * self.font_size_factor)
+
+        # 只要有一端有多行内容，就保持展开状态，防止清空输入时截断译文
+        need_expand_zh = zh_doc_h > (approx_line_h + 10) or "\n" in text
+        need_expand_jp = jp_doc_h > (approx_line_h + 10)
+        self.is_expanded = need_expand_zh or need_expand_jp
         
         if not self.is_expanded:
-            # Use a slightly more robust check
-            if doc_h > (approx_line_h + 10) or "\n" in text:
-                self.is_expanded = True
-        elif not text:
-            self.is_expanded = False
+            h_top = int(50 * s)
+            h_bottom = int(50 * s)
+        else:
+            # 动态计算高度，给予 15px 的呼吸内边距
+            h_top = max(int(50 * s), int(jp_doc_h + 15 * s))
+            h_bottom = max(int(50 * s), int(zh_doc_h + 15 * s))
             
-        target_visible_h = 203 if self.is_expanded else 103
-        target_h = int((target_visible_h + 40) * s)
+            # [Task] 解除硬编码限制：将最大限制从 100 提升至 500 像素
+            max_limit = int(500 * s)
+            h_top = min(h_top, max_limit)
+            h_bottom = min(h_bottom, max_limit)
+
+        # 应用高度到各切片
+        self.top_section.setFixedHeight(h_top)
+        self.bottom_section.setFixedHeight(h_bottom)
+
+        # [Skill] 内容对齐：将控件高度锁定为文档内容高度，依靠布局系统的 AlignVCenter 实现垂直居中
+        # 这样即使在板块变大时，文字也会始终保持在板块的物理中心线
+        self.jp_display.setFixedHeight(int(jp_doc_h))
+        self.jp_slot.setFixedHeight(int(jp_doc_h))
+        self.zh_input.setFixedHeight(int(zh_doc_h))
+        self.zh_slot.setFixedHeight(int(zh_doc_h))
+
+        # 窗口总高度 = 顶部高度 + 底部高度 + 彩虹分割线(3) + 阴影边隙(40)
+        target_h = h_top + h_bottom + int(3 * s) + int(40 * s)
         
         if self.minimumHeight() != target_h:
             self.anim.stop()
@@ -1012,24 +1047,7 @@ class TranslatorWindow(QWidget):
             except: pass
             self.anim.valueChanged.connect(lambda v: self.setMaximumHeight(v))
             self.anim.start()
-            self.setMaximumHeight(target_h) # Set immediately if anim not wanted or as end val
-            
-        sect_h = 100 if self.is_expanded else 50
-        
-        # [Optimize] Only update if changed
-        target_sect_h = int(sect_h * s)
-        if self.top_section.height() != target_sect_h:
-            self.top_section.setFixedHeight(target_sect_h)
-            self.bottom_section.setFixedHeight(target_sect_h)
-            
-        if self.is_expanded:
-            h = int(sect_h * s)
-            self.zh_slot.setFixedHeight(h)
-            self.jp_slot.setFixedHeight(h)
-        else:
-            h = int(45 * s)
-            self.zh_slot.setFixedHeight(h)
-            self.jp_slot.setFixedHeight(h)
+            self.setMaximumHeight(target_h) 
         
         self.clear_btn.setVisible(self.is_expanded or bool(text))
         self._update_clear_btn_pos()
@@ -1083,10 +1101,17 @@ class TranslatorWindow(QWidget):
         self.zh_input.setPlainText("")
         self._handle_resizing()
 
+    def _auto_clear_jp(self):
+        """15秒时间到，清空译文，收回面板"""
+        self.jp_display.setPlainText("")
+        self._handle_resizing()
+
     def clear_input_forced(self):
         """Forced clear of both sections (X button/manual)"""
         self.zh_input.setPlainText("")
         self.jp_display.setPlainText("")
+        self.auto_clear_zh_timer.stop()
+        self.auto_clear_jp_timer.stop()
         self._handle_resizing()
 
     def _apply_scaling(self):
@@ -1150,9 +1175,9 @@ class TranslatorWindow(QWidget):
         self.jp_badge.update_style(top_badge_bg, top_text); self.jp_display.update_style(top_text)
         self.zh_badge.update_style(bottom_badge_bg, bottom_text); self.zh_input.update_style(bottom_text)
         
-        # 老虎机动画统一使用半透明灰色
-        zh_slot_color = "rgba(255,255,255,0.5)" if self.theme_mode == "Dark" else "rgba(0,0,0,0.4)"
-        jp_slot_color = "rgba(0,0,0,0.4)" if self.theme_mode == "Dark" else "rgba(255,255,255,0.5)"
+        # 老虎机动画统一使用半透明灰色 (与 ScaledTextEdit 占位符颜色保持 0.4 透明度一致)
+        zh_slot_color = "rgba(255,255,255,0.4)" if self.theme_mode == "Dark" else "rgba(0,0,0,0.4)"
+        jp_slot_color = "rgba(0,0,0,0.4)" if self.theme_mode == "Dark" else "rgba(255,255,255,0.4)"
         self.zh_slot.set_text_color(zh_slot_color); self.jp_slot.set_text_color(jp_slot_color)
         
         # Fading overlays need color update too
@@ -1180,6 +1205,33 @@ class TranslatorWindow(QWidget):
 
     def contextMenuEvent(self, event):
         self.show_context_menu(event.globalPos())
+
+    # [New] Update to support "Shortcut Hint" menu action
+    def toggle_teaching_tip(self):
+        from ui_components import TeachingTip
+        if hasattr(self, 'teaching_tip') and self.teaching_tip and self.teaching_tip.isVisible():
+            self.teaching_tip.close()
+            self.teaching_tip = None
+        else:
+            self.show_teaching_tip()
+
+    def show_teaching_tip(self):
+        from ui_components import TeachingTip
+        if hasattr(self, 'teaching_tip') and self.teaching_tip:
+            try: self.teaching_tip.close()
+            except: pass
+            
+        self.teaching_tip = TeachingTip(None)
+        # TranslatorWindow has a shadow and margins, so passing 'self.container' might be better reference?
+        # But show_beside uses mapToGlobal on the widget.
+        # self.container is the visible part (minus shadow margins).
+        # But TranslatorWindow (self) frameGeometry includes invisible shadow margins?
+        # Actually window flags are Frameless.
+        # Let's align to 'self.container' or 'self'.
+        # asr_mode uses 'self'. TranslatorWindow is similar.
+        self.teaching_tip.show_beside(self)
+        self.teaching_tip.destroyed.connect(lambda: setattr(self, 'teaching_tip', None))
+
 
     def show_context_menu(self, global_pos):
         # [Task] 使用统一的菜单创建器
@@ -1351,6 +1403,8 @@ class TranslatorWindow(QWidget):
         self.jp_display.setPlaceholderText("翻訳を待機中"); 
         self.jp_display.setPlainText(t); 
         self.jp_display._on_content_changed()
+        self._handle_resizing()
+        self.auto_clear_jp_timer.start()
 
     def update_status(self, status):
         if status == "loading" or "正在切换模型" in status: 
@@ -1425,6 +1479,9 @@ def create_context_menu(parent_widget=None, config=None, signals_proxy=None):
         config = get_model_config()
 
     menu = QMenu(parent_widget)
+    # [Fix] Enable translucent background for perfect rounded corners
+    menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    menu.setWindowFlags(menu.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
     
     # --- 样式美化 ---
     is_light = config.theme_mode == "Light"
@@ -1432,125 +1489,165 @@ def create_context_menu(parent_widget=None, config=None, signals_proxy=None):
     menu_fg = "#000000" if is_light else "#ffffff"
     menu_sel = "#f0f0f0" if is_light else "#3d3d3d" # 浅色选中背景
     border_col = "#e0e0e0" if is_light else "#454545"
+    
+    # [Fix] Use system highlight color to match Slider and OS theme (e.g. Pink)
+    try:
+        accent_col = QApplication.palette().color(QPalette.ColorRole.Highlight).name()
+    except:
+        accent_col = "#0078d4" if is_light else "#2196f3" # Fallback
+
+    import os
+    
+    # Base64 SVGs for reliable loading without file path issues
+    # (Kept for reference or future use, though currently unused due to checkmark removal)
+    svg_white_b64 = "PHN2ZyB3aWR0aD0iMTQiIGhlaWdodD0iMTQiIHZpZXdCb3g9IjAgMCAxNCAxNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMi41IDdMNS41IDEwTDExLjUgNCIgc3Ryb2tlPSIjY2NjY2NjIiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9zdmc+"
+    svg_dark_b64 = "PHN2ZyB3aWR0aD0iMTQiIGhlaWdodD0iMTQiIHZpZXdCb3g9IjAgMCAxNCAxNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMi41IDdMNS41IDEwTDExLjUgNCIgc3Ryb2tlPSIjMzMzMzMzIiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+PC9zdmc+"
+    
+    check_icon_url = f"url(data:image/svg+xml;base64,{svg_dark_b64})" if is_light else f"url(data:image/svg+xml;base64,{svg_white_b64})"
 
     menu.setStyleSheet(f"""
-        QMenu {{ background-color: {menu_bg}; color: {menu_fg}; border: 1px solid {border_col}; border-radius: 8px; padding: 4px; }}
-        QMenu::item {{ padding: 6px 24px 6px 12px; border-radius: 4px; margin: 2px; }}
+        QMenu {{ 
+            background-color: {menu_bg}; 
+            color: {menu_fg}; 
+            border: 1px solid {border_col}; 
+            border-radius: 8px; 
+            padding: 4px;
+            icon-size: 0px; 
+        }}
+        
+        QMenu::item {{ 
+            padding: 6px 24px 6px 6px;
+            border-radius: 4px; 
+            margin: 0px; 
+            border: none; 
+        }} 
+        
         QMenu::item:selected {{ background-color: {menu_sel}; }}
-        QMenu::item:checked {{ font-weight: bold; background-color: {menu_sel}; }}
-        QMenu::separator {{ height: 1px; background: {border_col}; margin: 4px 8px; }}
+        
+        /* Indicators hidden */
+        QMenu::indicator {{ width: 0px; image: none; }}
+        QMenu::icon {{ display: none; width: 0px; }}
+        QMenu::separator {{ height: 1px; background: {border_col}; margin: 2px 0px; }}
     """)
     
-    # 标题样式 (Label)
-    def make_title(text):
-        lbl = QLabel(text)
-        lbl.setStyleSheet(f"color: #888888; font-size: 11px; font-weight: bold; padding: 4px 12px;")
-        wa = QWidgetAction(menu)
-        wa.setDefaultWidget(lbl)
-        return wa
+    # ... transparency section ...
 
-    # === 模式选择 (Mode Selection) ===
-    # [Fix] 直接使用属性获取最新状态，不要用 stale 的 config.data
+    # === 1. 透明度滑块 (Top) ===
+    opacity_action = QWidgetAction(menu)
+    opacity_widget = QWidget()
+    op_layout = QVBoxLayout(opacity_widget)
+    op_layout.setContentsMargins(6, 6, 6, 0) # Keep user's preferred margins
+    op_layout.setSpacing(0)
+    
+    op_lbl = QLabel("透明度")
+    op_lbl.setStyleSheet(f"color: {menu_fg}; font-weight: bold;")
+    
+    op_slider = QSlider(Qt.Orientation.Horizontal)
+    op_slider.setRange(20, 100)
+    current_op = getattr(config, 'window_opacity', 0.95)
+    op_slider.setValue(int(current_op * 100))
+    
+    def on_op_change(v):
+        f_val = v / 100.0
+        config.window_opacity = f_val
+        if hasattr(parent_widget, "update_background_opacity"):
+            parent_widget.update_background_opacity(f_val)
+        if signals_proxy and hasattr(signals_proxy, 'requestOpacityChange'):
+            pass
+
+    op_slider.valueChanged.connect(on_op_change)
+    op_slider.sliderReleased.connect(config.save_config)
+    
+    op_layout.addWidget(op_lbl)
+    op_layout.addWidget(op_slider)
+    
+    opacity_action.setDefaultWidget(opacity_widget)
+    menu.addAction(opacity_action)
+
+    # === 2. 详细设置面板 (Settings) ===
+    act_settings = QAction("详细设置面板", menu)
+    def safe_open_settings():
+        if signals_proxy:
+            try:
+                if hasattr(signals_proxy, 'requestOpenSettings'):
+                    signals_proxy.requestOpenSettings.emit()
+            except: pass
+    act_settings.triggered.connect(safe_open_settings)
+    menu.addAction(act_settings)
+    
+    menu.addSeparator()
+
+    # Helper to create check-suffixed label
+    def get_label(text, checked):
+        return f"{text} ☑" if checked else text
+
+    # === 3. 模式选择 (Modes) ===
     current_mode = getattr(config, 'app_mode', 'asr')
     
-    act_asr = QAction("中文识别模式", menu)
-    act_asr.setCheckable(True)
-    act_asr.setChecked(current_mode == "asr")
+    act_asr = QAction(get_label("中文识别模式", current_mode == "asr"), menu)
     act_asr.triggered.connect(lambda: signals_proxy.requestAppModeChange.emit("asr") if signals_proxy else None)
     menu.addAction(act_asr)
     
-    act_translation = QAction("中日双显模式", menu)
-    act_translation.setCheckable(True)
-    act_translation.setChecked(current_mode == "translation")
+    act_translation = QAction(get_label("中日双显模式", current_mode == "translation"), menu)
     act_translation.triggered.connect(lambda: signals_proxy.requestAppModeChange.emit("translation") if signals_proxy else None)
     menu.addAction(act_translation)
     
     menu.addSeparator()
 
-    # === 1. 透明度滑块 (0% - 100%) ===
-    # menu.addAction(make_title("背景透明度"))
-    opacity_action = QWidgetAction(menu)
-    opacity_widget = QWidget()
-    op_layout = QHBoxLayout(opacity_widget)
-    op_layout.setContentsMargins(12, 4, 12, 4)
-    op_layout.setSpacing(10)
-    
-    op_lbl = QLabel("透明度")
-    op_lbl.setStyleSheet(f"color: {menu_fg};")
-    op_val = QLabel(f"{int(getattr(config, 'window_opacity', 0.95)*100)}%")
-    op_val.setFixedWidth(35)
-    op_val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-    op_val.setStyleSheet(f"color: {menu_fg}; font-weight: bold;")
-    
-    op_slider = QSlider(Qt.Orientation.Horizontal)
-    op_slider.setRange(0, 100)
-    # config 可能没有 window_opacity, 默认 0.95
-    current_op = getattr(config, 'window_opacity', 0.95)
-    op_slider.setValue(int(current_op * 100))
-    op_slider.setFixedWidth(100)
-    
-    def on_op_change(v):
-        op_val.setText(f"{v}%")
-        f_val = v / 100.0
-        config.window_opacity = f_val
-        if hasattr(parent_widget, "update_background_opacity"):
-            parent_widget.update_background_opacity(f_val)
-        if signals_proxy and hasattr(signals_proxy, 'requestOpacityChange'): # 如果有定义这个信号
-            # 虽然 TranslatorWindow 没定义 requestOpacityChange，但可以直接调用 m_cfg set
-            pass
-
-    op_slider.valueChanged.connect(on_op_change)
-    # 松手保存
-    op_slider.sliderReleased.connect(config.save_config)
-    
-    op_layout.addWidget(op_lbl)
-    op_layout.addWidget(op_slider)
-    op_layout.addWidget(op_val)
-    opacity_action.setDefaultWidget(opacity_widget)
-    menu.addAction(opacity_action)
-    
-    menu.addSeparator()
-
-    # === 3. 主题 ===
-    menu.addAction(make_title("主题 / 字体"))
-    
-    act_dark = QAction("深色主题", menu)
-    act_dark.setCheckable(True)
-    act_dark.setChecked(config.theme_mode == "Dark")
+    # === 4. 主题与字体 (Themes) ===
+    act_dark = QAction(get_label("深色主题", config.theme_mode == "Dark"), menu)
     act_dark.triggered.connect(lambda: signals_proxy.requestThemeChange.emit("Dark") if signals_proxy else None)
     menu.addAction(act_dark)
-    
-    act_light = QAction("浅色主题", menu)
-    act_light.setCheckable(True)
-    act_light.setChecked(config.theme_mode == "Light")
+
+    act_light = QAction(get_label("浅色主题", config.theme_mode == "Light"), menu)
     act_light.triggered.connect(lambda: signals_proxy.requestThemeChange.emit("Light") if signals_proxy else None)
     menu.addAction(act_light)
     
-    # menu.addSeparator() # 紧凑一点
-
-    # === 4. 字体 ===
-    act_song = QAction("思源宋体", menu)
-    act_song.setCheckable(True)
-    act_song.setChecked(config.font_name == "思源宋体")
+    menu.addSeparator()
+    
+    act_song = QAction(get_label("思源宋体", config.font_name == "思源宋体"), menu)
     act_song.triggered.connect(lambda: signals_proxy.requestFontChange.emit("思源宋体") if signals_proxy else None)
     menu.addAction(act_song)
     
-    act_hei = QAction("思源黑体", menu)
-    act_hei.setCheckable(True)
-    act_hei.setChecked(config.font_name == "思源黑体")
+    act_hei = QAction(get_label("思源黑体", config.font_name == "思源黑体"), menu)
     act_hei.triggered.connect(lambda: signals_proxy.requestFontChange.emit("思源黑体") if signals_proxy else None)
     menu.addAction(act_hei)
 
     menu.addSeparator()
     
-    # === 5. 系统操作 ===
-    # act_settings = QAction("更多设置...", menu)
-    # act_settings.triggered.connect(lambda: signals_proxy.requestOpenSettings.emit() if signals_proxy else None)
-    # menu.addAction(act_settings)
+    # === 5. 系统操作 (System) ===
+    # 开机自启
+    is_autostart = False
+    try: is_autostart = config.auto_start
+    except: pass
     
-    act_restart = QAction("重启软件", menu)
+    act_autostart = QAction(get_label("开机自启", is_autostart), menu)
+    def on_autostart_trigger():
+        new_state = not is_autostart
+        setattr(config, 'auto_start', new_state)
+        # Re-opening menu will update text, but we should probably save/apply immediately?
+        # Since menu closes on click, next open will show correct state.
+    
+    act_autostart.triggered.connect(on_autostart_trigger)
+    menu.addAction(act_autostart)
+
+    # 快捷键提示
+    act_tip = QAction("快捷键提示", menu)
+    if hasattr(parent_widget, "toggle_teaching_tip"):
+        act_tip.triggered.connect(parent_widget.toggle_teaching_tip)
+    menu.addAction(act_tip)
+    
+    act_restart = QAction("重启中日说", menu)
     act_restart.triggered.connect(lambda: signals_proxy.requestRestart.emit() if signals_proxy else None)
     menu.addAction(act_restart)
+    
+    # 官网链接
+    act_website = QAction("中日说官网", menu)
+    def open_website():
+        import webbrowser
+        webbrowser.open("https://input.saaaai.com/")
+    act_website.triggered.connect(open_website)
+    menu.addAction(act_website)
     
     act_quit = QAction("彻底退出", menu)
     act_quit.triggered.connect(lambda: signals_proxy.requestQuit.emit() if signals_proxy else None)

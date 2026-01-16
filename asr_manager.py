@@ -178,8 +178,16 @@ def clean_asr_output(text: str, mode: str = "raw", is_insertion: bool = False) -
     except Exception as e:
         print(f"[ASRManager] Emoji error: {e}")
 
-    # 4. 移除多余的多重空格
-    text = re.sub(r'\s+', ' ', text)
+    # [Task] 语言敏感型空格处理
+    # 如果包含中文或日文字符，则强制移除所有内部空格（中日文分词残留）
+    # 如果是纯英文/西文，则保留单空格（保护英文单词间距）
+    has_cjk = re.search(r'[\u4e00-\u9fa5\u3040-\u30ff\u31f0-\u31ff]', text)
+    if has_cjk:
+        text = re.sub(r'\s+', '', text)
+    else:
+        # 纯英文模式：仅将多重空格压缩为单空格
+        text = re.sub(r'\s+', ' ', text)
+        
     return text.strip()
 
 # ===== ONNX 推理独立进程核心函数 =====

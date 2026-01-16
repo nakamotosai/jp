@@ -6,9 +6,11 @@ __pycache__/
 .Python
 env/
 build/
-develop-eggs/
 dist/
-downloads/
+Output/
+*.spec
+*.exe
+develop-eggs/
 eggs/
 .eggs/
 lib/
@@ -23,6 +25,8 @@ wheels/
 
 # Virtual Environment
 venv/
+.venv/
+venv_release/
 ENV/
 
 # Models (Large Files)
@@ -38,6 +42,8 @@ error.log
 debug.log
 debug_run.log
 main.log
+settings_crash.txt
+asr_process.log
 
 # IDEs
 .vscode/

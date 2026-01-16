@@ -1,7 +1,6 @@
-import os, json
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGraphicsDropShadowEffect, 
-    QApplication, QLabel, QPushButton, QFrame, QMenu, QSizePolicy
+    QApplication, QLabel, QPushButton, QFrame, QMenu, QSizePolicy, QGraphicsOpacityEffect
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve, pyqtProperty
 from PyQt6.QtGui import QColor, QPainter, QIcon, QFontMetrics, QPen, QBrush, QFont
@@ -143,7 +142,7 @@ class ASRModeWindow(QWidget):
         self.container.setObjectName("asr_container")
         
         self.container_layout = QHBoxLayout(self.container)
-        self.container_layout.setContentsMargins(15, 0, 15, 0) # Adjusted right margin
+        self.container_layout.setContentsMargins(15, 0, 15, 1) # [Task] 底部留白 1px 配合高度增加，使下边缘下移
         self.container_layout.setSpacing(0)
         self.container_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         
@@ -196,14 +195,20 @@ class ASRModeWindow(QWidget):
         self._placeholder_color = "rgba(255,255,255,0.5)"
         self._text_color = "white"
         
-        self.height_anim = QPropertyAnimation(self, b"geometry")
-        self.height_anim.setDuration(1000) # [Task] 再次变慢，1秒
-        self.height_anim.setEasingCurve(QEasingCurve.Type.OutQuart) # [Task] 使用 OutQuart 实现丝滑刹车
+        self.height_anim = QPropertyAnimation(self, b"anim_height")
+        self.height_anim.setDuration(400) # 400ms 兼顾丝滑与响应速度
+        self.height_anim.setEasingCurve(QEasingCurve.Type.OutQuart) 
         
         self.base_height = 50
         self.expanded_height = 100
         self.is_expanded = False
-
+        
+        # [Task] 文字淡入淡出特效
+        self.content_opacity = QGraphicsOpacityEffect(self.container)
+        self.container.setGraphicsEffect(self.content_opacity)
+        self.fade_anim = QPropertyAnimation(self.content_opacity, b"opacity")
+        self.fade_anim.setDuration(400) # [Task] 400ms 淡出 + 400ms 淡入，接近一秒
+        
         self._dragging = False
         self._drag_pos = None
 
@@ -306,7 +311,7 @@ class ASRModeWindow(QWidget):
         s = self.window_scale
         base_w = int(200 * s)
         if base_w < 100: base_w = 100 # 最小宽度保护
-        base_h = int(52 * s)
+        base_h = int(53 * s) # [Task] 从 52 改为 53，使下边缘下移 1px
         
         # 1. 强制设定显示区域宽度，确保折行计算正确
         # Window width = base_w + 50 (margins 25*2)
@@ -320,7 +325,7 @@ class ASRModeWindow(QWidget):
         
         # 3. 计算目标容器高度 (doc_h + 上下padding)
         # 上下留白给一点，避免贴边
-        padding_v = int(24 * s) 
+        padding_v = int(25 * s) # [Task] 从 24 改为 25
         target_h = max(base_h, int(doc_h + padding_v))
         
         # 4. 限制最大高度
@@ -347,32 +352,27 @@ class ASRModeWindow(QWidget):
                 self.setGeometry(geo)
                 return
 
-            try:
-                self.height_anim.finished.disconnect() # 断开之前的连接，防止堆积
+            # 动画前清理
+            try: self.height_anim.finished.disconnect()
             except: pass
-            
             self.height_anim.stop()
             
-            # [Critial Fix] 动画前必须解锁所有高度约束，否则布局系统会强制窗口瞬间跳变
+            # [Synchronization Fix] 动画前解锁所有高度约束
             self.setMinimumHeight(0)
             self.setMaximumHeight(16777215)
             self.container.setMinimumHeight(0)
             self.container.setMaximumHeight(16777215)
             
-            # 使用 geometry 动画，强制保持 Top-Left 不变
-            start_geo = self.geometry()
-            end_geo =  start_geo.adjusted(0, 0, 0, 0) # Copy
-            end_geo.setHeight(target_win_h)
+            # 属性动画，Setter 会同步调整 window 和 container
+            self.height_anim.setStartValue(current_h + 50)
+            self.height_anim.setEndValue(target_win_h)
             
-            self.height_anim.setStartValue(start_geo)
-            self.height_anim.setEndValue(end_geo)
-            
-            # 动画结束后锁定高度，保持刚性
             def on_anim_finished():
                 self.setMinimumHeight(target_win_h)
                 self.setMaximumHeight(target_win_h)
                 self.container.setMinimumHeight(target_h)
                 self.container.setMaximumHeight(target_h)
+                self.update() # 强制最后一次重绘，确保阴影归位
                 
             self.height_anim.finished.connect(on_anim_finished)
             self.height_anim.start()
@@ -387,7 +387,11 @@ class ASRModeWindow(QWidget):
             self.container.setMinimumHeight(target_h)
             self.container.setMaximumHeight(target_h)
 
-    def update_segment(self, text):
+    def update_segment(self, text, animate=True):
+        # 如果正在进行淡入淡出，且来了新文字，立即停止并恢复不透明度
+        self.fade_anim.stop()
+        self.content_opacity.setOpacity(1.0)
+
         # 如果正在进行动画，且现在有真正文本输入，强制停止动画
         if self.slot_label.isVisible():
             self.slot_label.setVisible(False)
@@ -449,7 +453,19 @@ class ASRModeWindow(QWidget):
                 QTimer.singleShot(1000, self.slot_label.settle_one_by_one)
 
     def clear_input(self):
-        self.update_segment(self.m_cfg.get_prompt("idle_zh"))
+        # 用户希望有淡入淡出过渡 (约一秒)
+        self.fade_anim.setStartValue(1.0)
+        self.fade_anim.setEndValue(0.0)
+        
+        def on_fade_out():
+            self.fade_anim.finished.disconnect()
+            self.update_segment(self.m_cfg.get_prompt("idle_zh"), animate=False)
+            self.fade_anim.setStartValue(0.0)
+            self.fade_anim.setEndValue(1.0)
+            self.fade_anim.start()
+            
+        self.fade_anim.finished.connect(on_fade_out)
+        self.fade_anim.start()
 
     def focus_input(self):
         self.display.setFocus()
@@ -587,6 +603,16 @@ class ASRModeWindow(QWidget):
         else:
             self.update_segment(self.m_cfg.get_prompt("idle_zh"))
 
+    # [Synchronized Animation Property]
+    def _get_anim_height(self): return self.height()
+    def _set_anim_height(self, h):
+        # h 是 Window 总高度
+        self.resize(self.width(), h)
+        # 强制同步 Container 高度 (Window - Shadow 25*2)
+        # 使用 setFixedHeight 绕过布局系统的滞后，确保圆角背景始终撑满
+        self.container.setFixedHeight(max(1, h - 50))
+    anim_height = pyqtProperty(int, fget=_get_anim_height, fset=_set_anim_height)
+
     def _show_hotkey_dialog(self):
         asr = self.m_cfg.hotkey_asr
         toggle = self.m_cfg.hotkey_toggle_ui
@@ -620,3 +646,27 @@ class ASRModeWindow(QWidget):
         self.display.setVisible(True)
         self.slot_label.setVisible(False)
         self.update_segment(current_idle_text)
+
+    # [New] 新手引导相关方法
+    def toggle_teaching_tip(self):
+        """切换新手引导显示"""
+        from ui_components import TeachingTip
+        if hasattr(self, 'teaching_tip') and self.teaching_tip and self.teaching_tip.isVisible():
+            self.teaching_tip.close()
+            self.teaching_tip = None
+        else:
+            self.show_teaching_tip()
+
+    def show_teaching_tip(self):
+        """显示新手引导"""
+        from ui_components import TeachingTip
+        # 如果已存在，先关闭旧的
+        if hasattr(self, 'teaching_tip') and self.teaching_tip:
+            try: self.teaching_tip.close()
+            except: pass
+            
+        self.teaching_tip = TeachingTip(None) # Parent None to be independent top-level
+        self.teaching_tip.show_beside(self)
+        
+        # 窗口关闭时清理引用
+        self.teaching_tip.destroyed.connect(lambda: setattr(self, 'teaching_tip', None))

@@ -587,23 +587,41 @@ class AppController(QObject):
 
     def open_settings(self):
         """打开设置窗口"""
-        active_window = self.window
-        active_window.hide()
-        
-        self._settings_window = SettingsWindow(self.tr_engine)
-        self._settings_window.settingsChanged.connect(self._apply_global_settings)
-        self._settings_window.engineChangeRequested.connect(self.sig_change_engine.emit)
-        self.tr_worker.status_changed.connect(self._on_engine_status_for_settings)
-        
-        self._settings_window.exec()
-        
         try:
-            self.tr_worker.status_changed.disconnect(self._on_engine_status_for_settings)
-        except:
-            pass
-        
-        self._settings_window = None
-        QTimer.singleShot(100, active_window.show)
+            print("[Main] Opening settings window...")
+            active_window = self.window
+            if active_window:
+                active_window.hide()
+            
+            self._settings_window = SettingsWindow(self.tr_engine)
+            self._settings_window.settingsChanged.connect(self._apply_global_settings)
+            self._settings_window.engineChangeRequested.connect(self.sig_change_engine.emit)
+            self.tr_worker.status_changed.connect(self._on_engine_status_for_settings)
+            
+            self._settings_window.exec()
+            
+            try:
+                self.tr_worker.status_changed.disconnect(self._on_engine_status_for_settings)
+            except:
+                pass
+            
+            self._settings_window = None
+            if active_window:
+                QTimer.singleShot(100, active_window.show)
+        except Exception as e:
+            import traceback
+            err = traceback.format_exc()
+            print(f"[Main] Error in open_settings: {e}\n{err}")
+            try:
+                # Force write to local file for debugging
+                with open("settings_crash.txt", "w", encoding="utf-8") as f:
+                    f.write(f"Error: {e}\nTraceback:\n{err}")
+            except: pass
+            
+            # Try to restore window if crashed
+            try:
+                if self.window: self.window.show()
+            except: pass
     
     def _on_engine_status_for_settings(self, status: str):
         """处理引擎状态变化，更新设置窗口"""
@@ -709,6 +727,7 @@ if __name__ == "__main__":
     from PyQt6.QtNetwork import QLocalSocket, QLocalServer
     
     app = QApplication(sys.argv)
+    app.setStyle("Fusion") # [Fix] Force Fusion style for consistent CSS rendering
     app.setQuitOnLastWindowClosed(False)
     
     server_name = "CNJP_Input_Server"
@@ -728,12 +747,31 @@ if __name__ == "__main__":
     if not server.listen(server_name):
         print(f"单实例服务启动失败: {server.errorString()}")
     
+    # ... existing code ...
     from model_config import get_model_config
     cfg = get_model_config()
     
+    # [Task] Enhanced Error Logging
+    def exception_hook(exctype, value, traceback_obj):
+        import traceback
+        error_msg = ''.join(traceback.format_exception(exctype, value, traceback_obj))
+        try:
+            log_path = os.path.join(cfg.DATA_DIR, "crash_error.log")
+            with open(log_path, 'a', encoding='utf-8') as f:
+                import datetime
+                f.write(f"\n[{datetime.datetime.now()}] Uncaught Exception:\n")
+                f.write(error_msg)
+                f.write("-" * 50 + "\n")
+        except: pass
+        sys.__excepthook__(exctype, value, traceback_obj)
+        print(error_msg)
+
+    sys.excepthook = exception_hook
+
     controller = AppController(app)
     
     def handle_new_connection():
+        # ... existing code ...
         client = server.nextPendingConnection()
         if client and client.waitForReadyRead(100):
             cmd = client.readAll().data()

@@ -622,6 +622,22 @@ class ModelConfig:
         self._show_on_start = value
         self.save_config()
 
+    @property
+    def auto_start(self) -> bool:
+        """获取开机自启状态 (Proxy to StartupManager)"""
+        try:
+            from startup_manager import StartupManager
+            return StartupManager.is_enabled()
+        except: return False
+        
+    @auto_start.setter
+    def auto_start(self, value: bool):
+        """设置开机自启"""
+        try:
+            from startup_manager import StartupManager
+            StartupManager.set_enabled(value)
+        except: pass
+
     def get_available_translator_engines(self) -> List[ModelInfo]:
         return [m for m in self.TRANSLATOR_MODELS.values() if m.available]
     
